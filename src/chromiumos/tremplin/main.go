@@ -7,10 +7,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"log/syslog"
 	"net"
-	"os"
 
 	pb "chromiumos/vm_tools/tremplin_proto"
 	"github.com/lxc/lxd/client"
@@ -46,17 +47,17 @@ func initStoragePool(c lxd.ContainerServer) error {
 	return c.CreateStoragePool(pool)
 }
 
-func initNetwork(c lxd.ContainerServer) error {
+func initNetwork(c lxd.ContainerServer, subnet string) error {
 	var defaultNetwork api.NetworksPost
-	if err := json.Unmarshal([]byte(`{
+	if err := json.Unmarshal([]byte(fmt.Sprintf(`{
 		"name": "lxdbr0",
 		"type": "bridge",
 		"managed": true,
 		"config": {
-			"ipv4.address": "none",
+			"ipv4.address": "%s",
 			"ipv6.address": "none"
 		}
-	}`), &defaultNetwork); err != nil {
+	}`, subnet)), &defaultNetwork); err != nil {
 		return err
 	}
 	network, etag, err := c.GetNetwork(defaultNetworkName)
@@ -124,12 +125,12 @@ func initProfile(c lxd.ContainerServer) error {
 	return c.UpdateProfile(defaultProfileName, profilePut, etag)
 }
 
-func initialSetup(c lxd.ContainerServer) error {
+func initialSetup(c lxd.ContainerServer, subnet string) error {
 	if err := initStoragePool(c); err != nil {
 		return err
 	}
 
-	if err := initNetwork(c); err != nil {
+	if err := initNetwork(c, subnet); err != nil {
 		return err
 	}
 
@@ -137,20 +138,28 @@ func initialSetup(c lxd.ContainerServer) error {
 }
 
 func main() {
+	if logger, err := syslog.New(syslog.LOG_INFO, "tremplin"); err == nil {
+		log.SetOutput(logger)
+	}
+
+	hostAddr := flag.String("host_addr", "", "host IP address")
+	lxdSubnet := flag.String("lxd_subnet", "", "subnet for LXD in CIDR notation")
+	flag.Parse()
+
+	if len(*hostAddr) == 0 || len(*lxdSubnet) == 0 {
+		log.Fatal("Both host_addr and lxd_subnet must be specified")
+	}
+
 	c, err := lxd.ConnectLXDUnix("", nil)
 	if err != nil {
 		log.Fatal("Failed to connect to LXD daemon: ", err)
 	}
 
-	if err = initialSetup(c); err != nil {
+	if err = initialSetup(c, *lxdSubnet); err != nil {
 		log.Fatal("Failed to set up LXD: ", err)
 	}
 
-	if len(os.Args) < 2 {
-		log.Fatal("Expected an argument with the host IPv4 address")
-	}
-
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", os.Args[1], defaultHostPort), grpc.WithInsecure())
+	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", *hostAddr, defaultHostPort), grpc.WithInsecure())
 	if err != nil {
 		log.Print("Could not connect to tremplin listener: ", err)
 	}
@@ -175,6 +184,7 @@ func main() {
 		log.Fatal("Failed to listen: ", err)
 	}
 
+	log.Print("tremplin ready")
 	if err := server.grpcServer.Serve(lis); err != nil {
 		log.Fatal("Failed to serve gRPC: ", err)
 	}
