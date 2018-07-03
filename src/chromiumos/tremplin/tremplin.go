@@ -104,8 +104,9 @@ func (s *tremplinServer) execProgram(containerName string, args []string) (ret i
 	if err = op.Wait(); err != nil {
 		return 0, "", "", err
 	}
+	opAPI := op.Get()
 
-	retVal, ok := op.Metadata["return"].(float64)
+	retVal, ok := opAPI.Metadata["return"].(float64)
 	if !ok {
 		return 0, "", "", fmt.Errorf("return value for %q is not a float64", args[0])
 	}
@@ -320,13 +321,14 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		response.FailureReason = fmt.Sprintf("failed to wait for container startup: %v", err)
 		return response, nil
 	}
+	opAPI := op.Get()
 
-	switch op.StatusCode {
+	switch opAPI.StatusCode {
 	case api.Success:
 		response.Status = pb.StartContainerResponse_STARTED
 	case api.Cancelled, api.Failure:
 		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = op.Err
+		response.FailureReason = opAPI.Err
 	}
 
 	return response, nil
