@@ -163,12 +163,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 
 	response := &pb.CreateContainerResponse{}
 
-	container, _, err := s.lxd.GetContainer(in.ContainerName)
-	if err != nil {
-		response.Status = pb.CreateContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to check if container exists: %v", err)
-		return response, nil
-	}
+	container, _, _ := s.lxd.GetContainer(in.ContainerName)
 	if container != nil {
 		response.Status = pb.CreateContainerResponse_EXISTS
 		return response, nil

@@ -12,6 +12,9 @@ import (
 	"log"
 	"log/syslog"
 	"net"
+	"os"
+	"os/user"
+	"strconv"
 
 	pb "chromiumos/vm_tools/tremplin_proto"
 	"github.com/lxc/lxd/client"
@@ -26,6 +29,7 @@ const (
 	defaultNetworkName     = "lxdbr0"
 	defaultListenPort      = 8890
 	defaultHostPort        = 7778
+	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
 )
 
 func initStoragePool(c lxd.ContainerServer) error {
@@ -134,7 +138,33 @@ func initialSetup(c lxd.ContainerServer, subnet string) error {
 		return err
 	}
 
-	return initProfile(c)
+	if err := initProfile(c); err != nil {
+		return err
+	}
+
+	// Create the lxd_conf directory for manual LXD usage.
+	if err := os.MkdirAll(lxdConfPath, 0755); err != nil {
+		return err
+	}
+
+	// Set the conf dir to be owned by chronos.
+	u, err := user.Lookup("chronos")
+	if err != nil {
+		return err
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid uid: %v", u.Uid, err)
+	}
+	g, err := user.LookupGroup("chronos")
+	if err != nil {
+		return err
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid gid: %v", g.Gid, err)
+	}
+	return os.Chown(lxdConfPath, uid, gid)
 }
 
 func main() {
