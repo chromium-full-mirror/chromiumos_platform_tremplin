@@ -256,13 +256,13 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		},
 		{
 			name:    "ssh_authorized_keys",
-			content: in.ContainerPublicKey,
+			content: in.HostPublicKey,
 			source:  fmt.Sprintf("/run/sshd/%s/authorized_keys", container.Name),
 			dest:    "/dev/.ssh/ssh_authorized_keys",
 		},
 		{
 			name:    "ssh_host_key",
-			content: in.HostPrivateKey,
+			content: in.ContainerPrivateKey,
 			source:  fmt.Sprintf("/run/sshd/%s/ssh_host_key", container.Name),
 			dest:    "/dev/.ssh/ssh_host_key",
 		},
