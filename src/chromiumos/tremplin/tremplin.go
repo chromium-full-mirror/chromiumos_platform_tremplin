@@ -360,7 +360,7 @@ func (s *tremplinServer) GetContainerUsername(ctx context.Context, in *pb.GetCon
 	}
 
 	response.Status = pb.GetContainerUsernameResponse_SUCCESS
-	response.Username = stdout
+	response.Username = strings.TrimSpace(stdout)
 	return response, nil
 }
 
