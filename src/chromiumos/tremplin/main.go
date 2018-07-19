@@ -79,7 +79,10 @@ func initProfile(c lxd.ContainerServer) error {
 	var defaultProfile api.ProfilesPost
 	if err := json.Unmarshal([]byte(`{
 		"name": "default",
-		"config": {"boot.autostart": "false"},
+		"config": {
+			"boot.autostart": "false",
+			"security.syscalls.blacklist": "keyctl errno 38"
+		},
 		"devices": {
 			"root": {
 				"path": "/",
