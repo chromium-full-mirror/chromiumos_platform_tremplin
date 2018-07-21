@@ -15,10 +15,12 @@ import (
 	"os"
 	"os/user"
 	"strconv"
+	"time"
 
 	pb "chromiumos/vm_tools/tremplin_proto"
 	"github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
+	"github.com/mdlayher/vsock"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -28,7 +30,7 @@ const (
 	defaultProfileName     = "default"
 	defaultNetworkName     = "lxdbr0"
 	defaultListenPort      = 8890
-	defaultHostPort        = 7778
+	defaultHostPort        = "7778"
 	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
 )
 
@@ -170,17 +172,26 @@ func initialSetup(c lxd.ContainerServer, subnet string) error {
 	return os.Chown(lxdConfPath, uid, gid)
 }
 
+// vsockHostDialer dials the vsock host. The addr is in this case is just the
+// port, as the vsock cid is implied to be the host..
+func vsockHostDialer(addr string, timeout time.Duration) (net.Conn, error) {
+	port, err := strconv.ParseInt(addr, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert addr to int: %q", addr)
+	}
+	return vsock.Dial(vsock.ContextIDHost, uint32(port))
+}
+
 func main() {
 	if logger, err := syslog.New(syslog.LOG_INFO, "tremplin"); err == nil {
 		log.SetOutput(logger)
 	}
 
-	hostAddr := flag.String("host_addr", "", "host IP address")
 	lxdSubnet := flag.String("lxd_subnet", "", "subnet for LXD in CIDR notation")
 	flag.Parse()
 
-	if len(*hostAddr) == 0 || len(*lxdSubnet) == 0 {
-		log.Fatal("Both host_addr and lxd_subnet must be specified")
+	if len(*lxdSubnet) == 0 {
+		log.Fatal("lxd_subnet must be specified")
 	}
 
 	c, err := lxd.ConnectLXDUnix("", nil)
@@ -192,7 +203,9 @@ func main() {
 		log.Fatal("Failed to set up LXD: ", err)
 	}
 
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", *hostAddr, defaultHostPort), grpc.WithInsecure())
+	conn, err := grpc.Dial(defaultHostPort,
+		grpc.WithDialer(vsockHostDialer),
+		grpc.WithInsecure())
 	if err != nil {
 		log.Print("Could not connect to tremplin listener: ", err)
 	}
@@ -212,7 +225,7 @@ func main() {
 		log.Fatal("Failed to inform host that tremplin is ready: ", err)
 	}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", defaultListenPort))
+	lis, err := vsock.Listen(defaultListenPort)
 	if err != nil {
 		log.Fatal("Failed to listen: ", err)
 	}
