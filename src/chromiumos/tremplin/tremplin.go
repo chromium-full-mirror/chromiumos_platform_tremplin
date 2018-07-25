@@ -6,10 +6,12 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
@@ -434,5 +436,54 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 
 	response.Status = pb.SetUpUserResponse_SUCCESS
 
+	return response, nil
+}
+
+// GetContainerInfo implements tremplin.GetContainerInfo.
+func (s *tremplinServer) GetContainerInfo(ctx context.Context, in *pb.GetContainerInfoRequest) (*pb.GetContainerInfoResponse, error) {
+	log.Printf("Received GetContainerInfo RPC: %s", in.ContainerName)
+
+	response := &pb.GetContainerInfoResponse{}
+
+	c, _, err := s.lxd.GetContainerState(in.ContainerName)
+	if err != nil {
+		response.Status = pb.GetContainerInfoResponse_NOT_FOUND
+		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
+		return response, nil
+	}
+	if c.StatusCode != api.Running {
+		response.Status = pb.GetContainerInfoResponse_STOPPED
+		response.FailureReason = fmt.Sprintf("container not running, status is: %d", c.StatusCode)
+		return response, nil
+	}
+
+	n, ok := c.Network["eth0"]
+	if !ok {
+		response.Status = pb.GetContainerInfoResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to get eth0 for container %q", in.ContainerName)
+		return response, nil
+	}
+
+	for _, addr := range n.Addresses {
+		if addr.Family == "inet" {
+			ip := net.ParseIP(addr.Address)
+			if ip == nil {
+				response.Status = pb.GetContainerInfoResponse_FAILED
+				response.FailureReason = fmt.Sprintf("failed to parse ipv4 address for container %q", in.ContainerName)
+				return response, nil
+			}
+			// Yes, this should be big endian. I don't know why it's flipped.
+			response.Ipv4Address = binary.LittleEndian.Uint32(ip.To4())
+			break
+		}
+	}
+
+	if response.Ipv4Address == 0 {
+		response.Status = pb.GetContainerInfoResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to find ipv4 address for container %q", in.ContainerName)
+		return response, nil
+	}
+
+	response.Status = pb.GetContainerInfoResponse_RUNNING
 	return response, nil
 }
