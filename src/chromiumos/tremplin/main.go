@@ -220,14 +220,14 @@ func main() {
 	pb.RegisterTremplinServer(server.grpcServer, &server)
 	reflection.Register(server.grpcServer)
 
-	_, err = server.listenerClient.TremplinReady(context.Background(), &pb.TremplinStartupInfo{})
-	if err != nil {
-		log.Fatal("Failed to inform host that tremplin is ready: ", err)
-	}
-
 	lis, err := vsock.Listen(defaultListenPort)
 	if err != nil {
 		log.Fatal("Failed to listen: ", err)
+	}
+
+	_, err = server.listenerClient.TremplinReady(context.Background(), &pb.TremplinStartupInfo{})
+	if err != nil {
+		log.Fatal("Failed to inform host that tremplin is ready: ", err)
 	}
 
 	log.Print("tremplin ready")
