@@ -79,6 +79,7 @@ type tremplinServer struct {
 	lxd            lxd.ContainerServer
 	grpcServer     *grpc.Server
 	listenerClient pb.TremplinListenerClient
+	milestone      int
 }
 
 // execProgram runs a program in a container to completion, capturing its
@@ -216,6 +217,13 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 	return response, nil
 }
 
+type bindMount struct {
+	name    string
+	content string
+	source  string
+	dest    string
+}
+
 // StartContainer implements tremplin.StartContainer.
 func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContainerRequest) (*pb.StartContainerResponse, error) {
 	log.Printf("Received StartContainer RPC: %s", in.ContainerName)
@@ -234,7 +242,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		return response, nil
 	}
 
-	// Prepare SSH keys and token.
+	// Prepare SSH keys, token, and apt config to bind-mount in.
 	// Clear out all existing devices for the container.
 	containerPut := container.Writable()
 	containerPut.Devices = map[string]map[string]string{}
@@ -244,12 +252,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		response.FailureReason = fmt.Sprintf("failed to create ssh key dir: %v", err)
 		return response, nil
 	}
-	bindMounts := []struct {
-		name    string
-		content string
-		source  string
-		dest    string
-	}{
+	bindMounts := []bindMount{
 		{
 			name:    "container_token",
 			content: in.Token,
@@ -269,6 +272,21 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 			dest:    "/dev/.ssh/ssh_host_key",
 		},
 	}
+
+	osRelease, err := getGuestOSRelease(s.lxd, container.Name)
+	if err == nil {
+		if osRelease.id == "debian" {
+			bindMounts = append(bindMounts, bindMount{
+				name:    "apt_config",
+				content: createAptSourceList(s.milestone),
+				source:  fmt.Sprintf("/run/%s_apt.list", container.Name),
+				dest:    "/etc/apt/sources.list.d/cros.list",
+			})
+		}
+	} else {
+		log.Printf("Could not identify container %q guest distro: %v", container.Name, err)
+	}
+
 	for _, b := range bindMounts {
 		// Disregard bind mounts without values.
 		if b.content == "" {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"log/syslog"
 	"net"
@@ -34,6 +35,7 @@ const (
 	defaultHostPort        = "7778"
 	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
 	devDriPath             = "/dev/dri"
+	milestonePath          = "/run/cros_milestone" // path to the file containing the Chrome OS milestone
 )
 
 func initStoragePool(c lxd.ContainerServer) error {
@@ -103,6 +105,11 @@ func initProfile(c lxd.ContainerServer) error {
 				"path":   "/opt/google/cros-containers",
 				"type":   "disk"
 			},
+			"cros_milestone": {
+				"source": "/run/cros_milestone",
+				"path":   "/dev/.cros_milestone",
+				"type":   "disk"
+			},
 			"host-ip": {
 				"source": "/run/host_ip",
 				"path":   "/dev/.host_ip",
@@ -154,42 +161,55 @@ func initProfile(c lxd.ContainerServer) error {
 	return c.UpdateProfile(defaultProfileName, profilePut, etag)
 }
 
-func initialSetup(c lxd.ContainerServer, subnet string) error {
+func initialSetup(c lxd.ContainerServer, subnet string) (int, error) {
 	if err := initStoragePool(c); err != nil {
-		return err
+		return 0, err
 	}
 
 	if err := initNetwork(c, subnet); err != nil {
-		return err
+		return 0, err
 	}
 
 	if err := initProfile(c); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Create the lxd_conf directory for manual LXD usage.
 	if err := os.MkdirAll(lxdConfPath, 0755); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Set the conf dir to be owned by chronos.
 	u, err := user.Lookup("chronos")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	uid, err := strconv.Atoi(u.Uid)
 	if err != nil {
-		return fmt.Errorf("%q is not a valid uid: %v", u.Uid, err)
+		return 0, fmt.Errorf("%q is not a valid uid: %v", u.Uid, err)
 	}
 	g, err := user.LookupGroup("chronos")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	gid, err := strconv.Atoi(g.Gid)
 	if err != nil {
-		return fmt.Errorf("%q is not a valid gid: %v", g.Gid, err)
+		return 0, fmt.Errorf("%q is not a valid gid: %v", g.Gid, err)
 	}
-	return os.Chown(lxdConfPath, uid, gid)
+	if err := os.Chown(lxdConfPath, uid, gid); err != nil {
+		return 0, err
+	}
+
+	// Create the milestone file to bind-mount into containers.
+	milestone, err := getMilestone()
+	if err != nil {
+		return 0, fmt.Errorf("failed to determine Chrome OS milestone: %v", err)
+	}
+
+	if err := ioutil.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
+		return 0, fmt.Errorf("could not write milestone file: %v", err)
+	}
+	return milestone, nil
 }
 
 // vsockHostDialer dials the vsock host. The addr is in this case is just the
@@ -219,7 +239,8 @@ func main() {
 		log.Fatal("Failed to connect to LXD daemon: ", err)
 	}
 
-	if err = initialSetup(c, *lxdSubnet); err != nil {
+	milestone, err := initialSetup(c, *lxdSubnet)
+	if err != nil {
 		log.Fatal("Failed to set up LXD: ", err)
 	}
 
@@ -235,6 +256,7 @@ func main() {
 		lxd:            c,
 		grpcServer:     grpc.NewServer(),
 		listenerClient: pb.NewTremplinListenerClient(conn),
+		milestone:      milestone,
 	}
 
 	pb.RegisterTremplinServer(server.grpcServer, &server)
