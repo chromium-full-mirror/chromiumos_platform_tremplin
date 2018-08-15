@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -32,6 +33,7 @@ const (
 	defaultListenPort      = 8890
 	defaultHostPort        = "7778"
 	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
+	devDriPath             = "/dev/dri"
 )
 
 func initStoragePool(c lxd.ContainerServer) error {
@@ -120,6 +122,24 @@ func initProfile(c lxd.ContainerServer) error {
 	}`), &defaultProfile); err != nil {
 		return err
 	}
+
+	filepath.Walk(devDriPath, func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path != devDriPath && f.IsDir() {
+			return filepath.SkipDir
+		}
+		if f.Mode()&os.ModeCharDevice != os.ModeCharDevice {
+			return nil
+		}
+		defaultProfile.Devices[f.Name()] = map[string]string{
+			"source": path,
+			"mode":   "0666",
+			"type":   "unix-char",
+		}
+		return nil
+	})
 
 	profile, etag, err := c.GetProfile(defaultProfileName)
 	// Assume on error that the profile doesn't exist.
