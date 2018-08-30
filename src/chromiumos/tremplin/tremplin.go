@@ -172,7 +172,9 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 		return response, nil
 	}
 
-	imageServer, err := lxd.ConnectSimpleStreams(in.ImageServer, nil)
+	imageServerUrl := strings.Replace(in.ImageServer, "%d", strconv.Itoa(s.milestone), 1)
+
+	imageServer, err := lxd.ConnectSimpleStreams(imageServerUrl, nil)
 	if err != nil {
 		response.Status = pb.CreateContainerResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to connect to simplestreams image server: %v", err)
