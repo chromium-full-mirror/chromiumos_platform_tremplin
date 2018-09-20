@@ -87,6 +87,7 @@ func initProfile(c lxd.ContainerServer) error {
 		"name": "default",
 		"config": {
 			"boot.autostart": "false",
+			"raw.idmap": "both 1000 1000",
 			"security.syscalls.blacklist": "keyctl errno 38"
 		},
 		"devices": {
@@ -113,6 +114,11 @@ func initProfile(c lxd.ContainerServer) error {
 			"host-ip": {
 				"source": "/run/host_ip",
 				"path":   "/dev/.host_ip",
+				"type":   "disk"
+			},
+			"shared": {
+				"source": "/mnt/shared",
+				"path":   "/ChromeOS",
 				"type":   "disk"
 			},
 			"sshd_config": {

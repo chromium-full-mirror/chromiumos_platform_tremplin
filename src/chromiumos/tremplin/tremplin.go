@@ -309,16 +309,6 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		}
 	}
 
-	// Mount the shared directory in the container.
-	containerPut.Devices["shared"] = map[string]string{
-		"source": "/mnt/shared",
-		"path":   "/mnt/shared",
-		"type":   "disk",
-	}
-
-	// Also make sure that uid/gid 1000 is mapped into the container.
-	containerPut.Config["raw.idmap"] = "both 1000 1000"
-
 	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
 	if err != nil {
 		response.Status = pb.StartContainerResponse_FAILED
