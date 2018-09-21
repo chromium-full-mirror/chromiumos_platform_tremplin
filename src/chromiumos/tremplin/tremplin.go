@@ -278,12 +278,18 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 	osRelease, err := getGuestOSRelease(s.lxd, container.Name)
 	if err == nil {
 		if osRelease.id == "debian" {
-			bindMounts = append(bindMounts, bindMount{
-				name:    "apt_config",
-				content: createAptSourceList(s.milestone),
-				source:  fmt.Sprintf("/run/%s_apt.list", container.Name),
-				dest:    "/etc/apt/sources.list.d/cros.list",
-			})
+			args := lxd.ContainerFileArgs{
+				Content:   strings.NewReader(createAptSourceList(s.milestone)),
+				UID:       0,
+				GID:       0,
+				Mode:      0644,
+				Type:      "file",
+				WriteMode: "overwrite",
+			}
+			err = s.lxd.CreateContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", args)
+			if err != nil {
+				log.Print("Failed to update guest cros.list:", err)
+			}
 		}
 	} else {
 		log.Printf("Could not identify container %q guest distro: %v", container.Name, err)
