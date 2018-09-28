@@ -65,7 +65,8 @@ func initNetwork(c lxd.ContainerServer, subnet string) error {
 		"managed": true,
 		"config": {
 			"ipv4.address": "%s",
-			"ipv6.address": "none"
+			"ipv6.address": "none",
+			"raw.dnsmasq": "resolv-file=/run/resolv.conf"
 		}
 	}`, subnet)), &defaultNetwork); err != nil {
 		return err
