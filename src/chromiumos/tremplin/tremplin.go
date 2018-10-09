@@ -394,7 +394,7 @@ func (s *tremplinServer) GetContainerUsername(ctx context.Context, in *pb.GetCon
 
 // SetUpUser implements tremplin.SetUpUser.
 func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest) (*pb.SetUpUserResponse, error) {
-	log.Printf("Received SetUpUser RPC: %s (username %s)", in.ContainerName, in.ContainerUsername)
+	log.Printf("Received SetUpUser RPC: %s", in.ContainerName)
 
 	response := &pb.SetUpUserResponse{}
 
