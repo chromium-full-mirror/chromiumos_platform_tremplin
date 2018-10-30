@@ -119,7 +119,7 @@ func initProfile(c lxd.ContainerServer) error {
 			},
 			"shared": {
 				"source": "/mnt/shared",
-				"path":   "/ChromeOS",
+				"path":   "/mnt/chromeos",
 				"type":   "disk"
 			},
 			"sshd_config": {
