@@ -135,6 +135,11 @@ func (s *tremplinServer) handleCreateOperation(op api.Operation) {
 	}
 
 	switch op.StatusCode {
+	case api.Pending:
+		// The operation will only be here a short time before transitioning to
+		// Running. Don't bother informing the host since there's not anything
+		// it can do yet.
+		return
 	case api.Success:
 		req.Status = pb.ContainerCreationProgress_CREATED
 	case api.Running:
