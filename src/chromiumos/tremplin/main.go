@@ -131,6 +131,9 @@ func initProfile(c lxd.ContainerServer) error {
 				"source": "/dev/wl0",
 				"mode":   "0666",
 				"type":   "unix-char"
+			},
+			"usb": {
+				"type": "usb"
 			}
 		}
 	}`), &defaultProfile); err != nil {
