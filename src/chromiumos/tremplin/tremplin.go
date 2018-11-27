@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -52,7 +51,8 @@ func getContainerName(s string) (string, error) {
 func getDownloadPercentage(opMetadata map[string]interface{}) (int32, error) {
 	progress, ok := opMetadata["download_progress"].(string)
 	if !ok {
-		return 0, errors.New("could not read operation download progress")
+		// If there's no progress metadata, the download hasn't started yet.
+		return 0, nil
 	}
 
 	matches := downloadRegexp.FindStringSubmatch(progress)
