@@ -607,8 +607,76 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	// Groups for user 1000.
 	var groups []string
 
+	// Create gid 655360 (android-root) if it doesn't already exist.
+	ret, stdout, stderr, err := s.execProgram(in.ContainerName, []string{"getent", "group", "655360"})
+	if err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to check android-root gid: %v", err)
+		return response, nil
+	}
+	if ret != 0 {
+		ret, _, stderr, err = s.execProgram(in.ContainerName,
+			[]string{"groupadd", "-g", "655360", "android-root"})
+		if err != nil {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to run android-root groupadd: %v", err)
+			return response, nil
+		}
+		if ret != 0 {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to add android-root group: %s", stderr)
+			return response, nil
+		}
+	}
+
+	// Create uid 655360 (android-root) if it doesn't already exist.
+	// Set group to android-root, home=/dev/null, shell=/bin/false.
+	ret, _, stderr, err = s.execProgram(in.ContainerName, []string{"id", "-nu", "655360"})
+	if err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to check android-root uid: %v", err)
+		return response, nil
+	}
+	if ret != 0 {
+		ret, _, stderr, err = s.execProgram(in.ContainerName,
+			[]string{"useradd", "-u", "655360", "-g", "android-root", "-d", "/dev/null", "-s", "/bin/false", "android-root"})
+		if err != nil {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to run android-root useradd: %v", err)
+			return response, nil
+		}
+		if ret != 0 {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to add android-root user: %s", stderr)
+			return response, nil
+		}
+	}
+
+	// Create gid 665357 (android-everybody) if it doesn't already exist.
+	ret, _, stderr, err = s.execProgram(in.ContainerName, []string{"getent", "group", "665357"})
+	if err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to check android-everybody gid: %v", err)
+		return response, nil
+	}
+	if ret != 0 {
+		ret, _, stderr, err = s.execProgram(in.ContainerName,
+			[]string{"groupadd", "-g", "665357", "android-everybody"})
+		if err != nil {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to run android-everybody groupadd: %v", err)
+			return response, nil
+		}
+		if ret != 0 {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to add android-everybody group: %s", stderr)
+			return response, nil
+		}
+		groups = append(groups, "android-everybody")
+	}
+
 	// Create uid 1000 if it doesn't already exist.
-	ret, stdout, stderr, err := s.execProgram(in.ContainerName, []string{"id", "-nu", "1000"})
+	ret, stdout, stderr, err = s.execProgram(in.ContainerName, []string{"id", "-nu", "1000"})
 	if err != nil {
 		response.Status = pb.SetUpUserResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to check 1000 uid: %v", err)
