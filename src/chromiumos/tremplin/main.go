@@ -88,6 +88,7 @@ func initProfile(c lxd.ContainerServer) error {
 		"name": "default",
 		"config": {
 			"boot.autostart": "false",
+			"boot.host_shutdown_timeout": "9",
 			"raw.idmap": "both 1000 1000",
 			"security.syscalls.blacklist": "keyctl errno 38"
 		},
