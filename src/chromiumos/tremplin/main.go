@@ -36,6 +36,8 @@ const (
 	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
 	devDriPath             = "/dev/dri"
 	milestonePath          = "/run/cros_milestone" // path to the file containing the Chrome OS milestone
+
+	rawIDMapKey = "raw.idmap"
 )
 
 func initStoragePool(c lxd.ContainerServer) error {
@@ -171,7 +173,18 @@ func initProfile(c lxd.ContainerServer) error {
 	}
 
 	profilePut := profile.Writable()
+	// Preserve the idmap to prevent unwanted filesystem id shifts.
+	// TODO(crbug.com/911372)
+	oldIDMap, ok := profilePut.Config[rawIDMapKey]
+
 	profilePut.Config = defaultProfile.Config
+
+	if ok {
+		profilePut.Config[rawIDMapKey] = oldIDMap
+	} else {
+		delete(profilePut.Config, rawIDMapKey)
+	}
+
 	profilePut.Devices = defaultProfile.Devices
 
 	return c.UpdateProfile(defaultProfileName, profilePut, etag)
