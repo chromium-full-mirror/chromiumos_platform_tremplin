@@ -7,11 +7,13 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,6 +23,8 @@ import (
 	"github.com/lxc/lxd/shared/api"
 	"google.golang.org/grpc"
 )
+
+const shiftSnapshot = "rootfs-shift"
 
 // downloadRegexp extracts the download type and progress percentage from
 // download operation metadata.
@@ -74,7 +78,34 @@ func getDownloadPercentage(opMetadata map[string]interface{}) (int32, error) {
 	return int32(downloadPercent), nil
 }
 
-// server is used to implement the gRPC tremplin.Server.
+// idRemapRequired examines the last and next idmaps for a container and checks
+// if the container rootfs will require a remap when it next starts.
+func idRemapRequired(c *api.Container) (bool, error) {
+	lastIdmap, ok := c.ExpandedConfig["volatile.last_state.idmap"]
+	if !ok {
+		return false, fmt.Errorf("no volatile.last_state.idmap key for container %s", c.Name)
+	}
+	nextIdmap, ok := c.ExpandedConfig["volatile.idmap.next"]
+	if !ok {
+		return false, fmt.Errorf("no volatile.idmap.next key for container %s", c.Name)
+	}
+
+	// The idmap configs are JSON-encoded arrays of LXD idmap entries.
+	unmarshaledLastIdmap := []interface{}{}
+	if err := json.Unmarshal([]byte(lastIdmap), &unmarshaledLastIdmap); err != nil {
+		return false, err
+	}
+
+	unmarshaledNextIdmap := []interface{}{}
+	if err := json.Unmarshal([]byte(nextIdmap), &unmarshaledNextIdmap); err != nil {
+		return false, err
+	}
+
+	// A remap is required only if the last and next idmaps don't match.
+	return !reflect.DeepEqual(unmarshaledLastIdmap, unmarshaledNextIdmap), nil
+}
+
+// tremplinServer is used to implement the gRPC tremplin.Server.
 type tremplinServer struct {
 	lxd            lxd.ContainerServer
 	grpcServer     *grpc.Server
@@ -115,6 +146,107 @@ func (s *tremplinServer) execProgram(containerName string, args []string) (ret i
 		return 0, "", "", fmt.Errorf("return value for %q is not a float64", args[0])
 	}
 	return int(retVal), stdoutSink.String(), stderrSink.String(), nil
+}
+
+// createShiftSnapshot creates a snapshot for containerName in preparation
+// for a rootfs id shift.
+func (s *tremplinServer) createShiftSnapshot(containerName string) error {
+	snapshots, err := s.lxd.GetContainerSnapshots(containerName)
+	if err != nil {
+		return fmt.Errorf("failed to get container snapshots: %v", err)
+	}
+
+	// Delete any existing shift snapshot.
+	for _, snapshot := range snapshots {
+		if snapshot.Name == shiftSnapshot {
+			op, err := s.lxd.DeleteContainerSnapshot(containerName, shiftSnapshot)
+			if err != nil {
+				return fmt.Errorf("failed to delete existing snapshot: %v", err)
+			}
+			if err = op.Wait(); err != nil {
+				return fmt.Errorf("failed to wait for snapshot deletion: %v", err)
+			}
+			opAPI := op.Get()
+			if opAPI.StatusCode != api.Success {
+				return fmt.Errorf("snapshot deletion failed: %s", opAPI.Err)
+			}
+
+			break
+		}
+	}
+
+	op, err := s.lxd.CreateContainerSnapshot(containerName, api.ContainerSnapshotsPost{
+		Name:     shiftSnapshot,
+		Stateful: false,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create container snapshot: %v", err)
+	}
+	if err = op.Wait(); err != nil {
+		return fmt.Errorf("failed to wait for snapshot creation: %v", err)
+	}
+	opAPI := op.Get()
+	if opAPI.StatusCode != api.Success {
+		return fmt.Errorf("snapshot creation failed: %s", opAPI.Err)
+	}
+
+	return nil
+}
+
+func (s *tremplinServer) startContainer(containerName string, remap bool) {
+	req := &pb.ContainerStartProgress{
+		ContainerName: containerName,
+	}
+
+	// The host must be informed of the final outcome, so ensure it's updated
+	// on every exit path.
+	defer func() {
+		if req == nil {
+			return
+		}
+		_, err := s.listenerClient.UpdateStartStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not update start status on host: %v", err)
+			return
+		}
+	}()
+
+	if remap {
+		log.Printf("Snapshotting container %s to prepare for id remap", containerName)
+		if err := s.createShiftSnapshot(containerName); err != nil {
+			req.Status = pb.ContainerStartProgress_FAILED
+			req.FailureReason = err.Error()
+			return
+		}
+	}
+
+	reqState := api.ContainerStatePut{
+		Action:  "start",
+		Timeout: -1,
+	}
+	op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
+	if err != nil {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to start container: %v", err)
+		return
+	}
+
+	if err = op.Wait(); err != nil {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to wait for container startup: %v", err)
+		return
+	}
+	opAPI := op.Get()
+
+	switch opAPI.StatusCode {
+	case api.Success:
+		req.Status = pb.ContainerStartProgress_STARTED
+	case api.Cancelled:
+		req.Status = pb.ContainerStartProgress_CANCELLED
+	case api.Failure:
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = opAPI.Err
+	}
 }
 
 func (s *tremplinServer) handleCreateOperation(op api.Operation) {
@@ -327,13 +459,47 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		response.FailureReason = fmt.Sprintf("failed to set up devices: %v", err)
 		return response, nil
 	}
-
 	if err = op.Wait(); err != nil {
 		response.Status = pb.StartContainerResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to wait for container update: %v", err)
 		return response, nil
 	}
+	opAPI := op.Get()
+	if opAPI.StatusCode != api.Success {
+		response.Status = pb.StartContainerResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to update container: %v", err)
+		return response, nil
+	}
 
+	// We've updated the container, so refresh the local copy.
+	container, etag, err = s.lxd.GetContainer(in.ContainerName)
+	if err != nil {
+		response.Status = pb.StartContainerResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to get updated container: %v", err)
+		return response, nil
+	}
+
+	remapRequired, err := idRemapRequired(container)
+	if err != nil {
+		response.Status = pb.StartContainerResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to check if id remap required: %v", err)
+		return response, nil
+	}
+
+	if in.Async {
+		go s.startContainer(container.Name, remapRequired)
+
+		if remapRequired {
+			response.Status = pb.StartContainerResponse_REMAPPING
+
+		} else {
+			response.Status = pb.StartContainerResponse_STARTING
+		}
+
+		return response, nil
+	}
+
+	// TODO(smbarber): Remove once async codepath is default.
 	reqState := api.ContainerStatePut{
 		Action:  "start",
 		Timeout: -1,
@@ -350,7 +516,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		response.FailureReason = fmt.Sprintf("failed to wait for container startup: %v", err)
 		return response, nil
 	}
-	opAPI := op.Get()
+	opAPI = op.Get()
 
 	switch opAPI.StatusCode {
 	case api.Success:
