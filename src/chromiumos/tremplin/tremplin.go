@@ -414,58 +414,54 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	log.Printf("Received SetUpUser RPC: %s", in.ContainerName)
 
 	response := &pb.SetUpUserResponse{}
+	response.Username = in.ContainerUsername
 
-	// Check if uid 1000 exists first - if it does, leave it alone.
+	// Groups for user 1000.
+	var groups []string
+
+	// Create uid 1000 if it doesn't already exist.
 	ret, stdout, stderr, err := s.execProgram(in.ContainerName, []string{"id", "-nu", "1000"})
 	if err != nil {
 		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to check uid: %v", err)
+		response.FailureReason = fmt.Sprintf("failed to check 1000 uid: %v", err)
 		return response, nil
 	}
 	if ret == 0 {
-		response.Status = pb.SetUpUserResponse_EXISTS
-		response.FailureReason = fmt.Sprintf("user exists: %s", stdout)
-		return response, nil
-	}
-
-	ret, stdout, stderr, err = s.execProgram(in.ContainerName,
-		[]string{"useradd", "-u", "1000", "-s", "/bin/bash", "-m", in.ContainerUsername})
-	if err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to run useradd: %v", err)
-		return response, nil
-	}
-	if ret != 0 {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to add user: %s", stderr)
-		return response, nil
-	}
-
-	groups := []string{
-		"audio",
-		"cdrom",
-		"dialout",
-		"floppy",
-		"plugdev",
-		"sudo",
-		"users",
-		"video",
+		// User already exists, capture username.
+		response.Username = strings.TrimSpace(stdout)
+	} else {
+		ret, _, stderr, err = s.execProgram(in.ContainerName,
+			[]string{"useradd", "-u", "1000", "-s", "/bin/bash", "-m", in.ContainerUsername})
+		if err != nil {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to run 1000 useradd: %v", err)
+			return response, nil
+		}
+		if ret != 0 {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to add 1000 user: %s", stderr)
+			return response, nil
+		}
+		groups = append(groups,
+			"audio",
+			"cdrom",
+			"dialout",
+			"floppy",
+			"plugdev",
+			"sudo",
+			"users",
+			"video")
 	}
 
 	// Add groups, but don't fail - groups might not exist in the container.
 	for _, group := range groups {
-		ret, stdout, stderr, err = s.execProgram(in.ContainerName,
-			[]string{"usermod", "-aG", group, in.ContainerUsername})
-		if err != nil {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to run useradd: %v", err)
-			return response, nil
-		}
+		ret, _, stderr, _ = s.execProgram(in.ContainerName,
+			[]string{"usermod", "-aG", group, response.Username})
 	}
 
 	// Enable loginctl linger for the target user.
-	ret, stdout, stderr, err = s.execProgram(in.ContainerName,
-		[]string{"loginctl", "enable-linger", in.ContainerUsername})
+	ret, _, stderr, err = s.execProgram(in.ContainerName,
+		[]string{"loginctl", "enable-linger", response.Username})
 	if err != nil {
 		response.Status = pb.SetUpUserResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to run loginctl: %v", err)
