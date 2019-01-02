@@ -68,7 +68,7 @@ func initNetwork(c lxd.ContainerServer, subnet string) error {
 		"config": {
 			"ipv4.address": "%s",
 			"ipv6.address": "none",
-			"raw.dnsmasq": "resolv-file=/run/resolv.conf"
+			"raw.dnsmasq": "resolv-file=/run/resolv.conf\ndhcp-authoritative\nno-ping"
 		}
 	}`, subnet)), &defaultNetwork); err != nil {
 		return err
