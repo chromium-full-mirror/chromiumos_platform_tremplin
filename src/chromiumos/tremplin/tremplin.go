@@ -558,6 +558,7 @@ func (s *tremplinServer) GetContainerUsername(ctx context.Context, in *pb.GetCon
 		return response, nil
 	}
 
+	// Get username.
 	ret, stdout, stderr, err := s.execProgram(in.ContainerName, []string{"id", "-nu", "1000"})
 	if err != nil {
 		response.Status = pb.GetContainerUsernameResponse_FAILED
@@ -569,9 +570,30 @@ func (s *tremplinServer) GetContainerUsername(ctx context.Context, in *pb.GetCon
 		response.FailureReason = fmt.Sprintf("failed to get user for uid: %v", stderr)
 		return response, nil
 	}
+	response.Username = strings.TrimSpace(stdout)
+
+	// Get homedir.  It is section 6 of passwd entry.  E.g.:
+	// testuser:x:1000:1000::/home/testuser:/bin/bash
+	ret, stdout, stderr, err = s.execProgram(in.ContainerName, []string{"getent", "passwd", response.Username})
+	if err != nil {
+		response.Status = pb.GetContainerUsernameResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to run getent program: %v", err)
+		return response, nil
+	}
+	if ret != 0 {
+		response.Status = pb.GetContainerUsernameResponse_USER_NOT_FOUND
+		response.FailureReason = fmt.Sprintf("failed to get passwd entry: %v", stderr)
+		return response, nil
+	}
+	parts := strings.Split(strings.TrimSpace(stdout), ":")
+	if len(parts) <= 5 {
+		response.Status = pb.GetContainerUsernameResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to parse homedir in passwd entry: %v", stdout)
+		return response, nil
+	}
+	response.Homedir = parts[5]
 
 	response.Status = pb.GetContainerUsernameResponse_SUCCESS
-	response.Username = strings.TrimSpace(stdout)
 	return response, nil
 }
 
