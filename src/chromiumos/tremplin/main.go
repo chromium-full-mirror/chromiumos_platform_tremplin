@@ -181,8 +181,6 @@ func initProfile(c lxd.ContainerServer) error {
 
 	if ok {
 		profilePut.Config[rawIDMapKey] = oldIDMap
-	} else {
-		delete(profilePut.Config, rawIDMapKey)
 	}
 
 	profilePut.Devices = defaultProfile.Devices
