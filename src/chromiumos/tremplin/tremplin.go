@@ -9,10 +9,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -21,10 +23,14 @@ import (
 	pb "chromiumos/vm_tools/tremplin_proto"
 	"github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
+	"github.com/lxc/lxd/shared/ioprogress"
 	"google.golang.org/grpc"
 )
 
-const shiftSnapshot = "rootfs-shift"
+const (
+	backupSnapshot = "rootfs-backup"
+	shiftSnapshot  = "rootfs-shift"
+)
 
 // downloadRegexp extracts the download type and progress percentage from
 // download operation metadata.
@@ -148,27 +154,27 @@ func (s *tremplinServer) execProgram(containerName string, args []string) (ret i
 	return int(retVal), stdoutSink.String(), stderrSink.String(), nil
 }
 
-// createShiftSnapshot creates a snapshot for containerName in preparation
-// for a rootfs id shift.
-func (s *tremplinServer) createShiftSnapshot(containerName string) error {
+// createSnapshot creates a snapshot with snapshotName for containerName.
+// Any existing snapshot with the existing snapshotName is deleted first.
+func (s *tremplinServer) createSnapshot(containerName, snapshotName string) error {
 	snapshots, err := s.lxd.GetContainerSnapshots(containerName)
 	if err != nil {
 		return fmt.Errorf("failed to get container snapshots: %v", err)
 	}
 
-	// Delete any existing shift snapshot.
+	// Delete any existing snapshot with the same name.
 	for _, snapshot := range snapshots {
-		if snapshot.Name == shiftSnapshot {
-			op, err := s.lxd.DeleteContainerSnapshot(containerName, shiftSnapshot)
+		if snapshot.Name == snapshotName {
+			op, err := s.lxd.DeleteContainerSnapshot(containerName, snapshotName)
 			if err != nil {
-				return fmt.Errorf("failed to delete existing snapshot: %v", err)
+				return fmt.Errorf("failed to delete existing snapshot %s: %v", snapshotName, err)
 			}
 			if err = op.Wait(); err != nil {
-				return fmt.Errorf("failed to wait for snapshot deletion: %v", err)
+				return fmt.Errorf("failed to wait for snapshot %s deletion: %v", snapshotName, err)
 			}
 			opAPI := op.Get()
 			if opAPI.StatusCode != api.Success {
-				return fmt.Errorf("snapshot deletion failed: %s", opAPI.Err)
+				return fmt.Errorf("snapshot %s deletion failed: %s", snapshotName, opAPI.Err)
 			}
 
 			break
@@ -176,18 +182,18 @@ func (s *tremplinServer) createShiftSnapshot(containerName string) error {
 	}
 
 	op, err := s.lxd.CreateContainerSnapshot(containerName, api.ContainerSnapshotsPost{
-		Name:     shiftSnapshot,
+		Name:     snapshotName,
 		Stateful: false,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create container snapshot: %v", err)
+		return fmt.Errorf("failed to create container snapshot %s: %v", snapshotName, err)
 	}
 	if err = op.Wait(); err != nil {
-		return fmt.Errorf("failed to wait for snapshot creation: %v", err)
+		return fmt.Errorf("failed to wait for snapshot %s creation: %v", snapshotName, err)
 	}
 	opAPI := op.Get()
 	if opAPI.StatusCode != api.Success {
-		return fmt.Errorf("snapshot creation failed: %s", opAPI.Err)
+		return fmt.Errorf("snapshot %s creation failed: %s", snapshotName, opAPI.Err)
 	}
 
 	return nil
@@ -213,7 +219,7 @@ func (s *tremplinServer) startContainer(containerName string, remap bool) {
 
 	if remap {
 		log.Printf("Snapshotting container %s to prepare for id remap", containerName)
-		if err := s.createShiftSnapshot(containerName); err != nil {
+		if err := s.createSnapshot(containerName, shiftSnapshot); err != nil {
 			req.Status = pb.ContainerStartProgress_FAILED
 			req.FailureReason = err.Error()
 			return
@@ -825,5 +831,123 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 		response.FailureReasons = append(response.FailureReasons, fmt.Sprintf("container %s: %s", container.Name, strings.Join(failureReasons, ", ")))
 	}
 
+	return response, nil
+}
+
+func (s *tremplinServer) exportContainer(containerName, exportPath string) {
+	req := &pb.ContainerExportProgress{
+		ContainerName: containerName,
+	}
+
+	// The host must be informed of the final outcome, so ensure it's updated
+	// on every exit path.
+	defer func() {
+		if req == nil {
+			return
+		}
+		_, err := s.listenerClient.UpdateExportStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not update export status on host: %v", err)
+			return
+		}
+	}()
+
+	// Create a snapshot for export.  It is OK if the container is running.
+	if err := s.createSnapshot(containerName, backupSnapshot); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to create backup snapshot: %v", err)
+		return
+	}
+
+	// Publish.  TODO(joelhockey): Update lxc code to:
+	// 1. Add support for publish ProgressHandler.
+	// 2. Return success and provide fingerprint if image already exists.
+	reqPublish := api.ImagesPost{
+		Source: &api.ImagesPostSource{
+			Type: "snapshot",
+			Name: containerName + "/" + backupSnapshot,
+		},
+	}
+	op, err := s.lxd.CreateImage(reqPublish, nil)
+	if err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to publish: %v", err)
+		return
+	}
+	if err = op.Wait(); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed waiting to publish: %v", err)
+		return
+	}
+	opAPI := op.Get()
+	// Grab the fingerprint
+	fingerprint := opAPI.Metadata["fingerprint"].(string)
+
+	// Export image.
+	exportFilename := filepath.Join("/mnt/shared", exportPath, fingerprint+".tar.gz")
+	exportFile, err := os.Create(exportFilename)
+	if err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to create export file %s: %v", exportFilename, err)
+		return
+	}
+	defer exportFile.Close()
+	// We only need to supply ImageFileRequest.MetaFile and not
+	// ImageFileRequest.RootfsFile.  The exported image is a unified tarball
+	// with metadata and rootfs combined unless the LXD HTTP request to get the
+	// image has "Content-Type: multipart/form-data".
+	// https://github.com/lxc/lxd/blob/6802d7f73cf44fda6284fd8e657038e37d84e762/client/lxd_images.go#L197
+	reqExport := lxd.ImageFileRequest{
+		MetaFile: io.WriteSeeker(exportFile),
+		ProgressHandler: func(p ioprogress.ProgressData) {
+			// Parse percent from "74% (27.28MB/s)".
+			percent, err := strconv.ParseUint(strings.Split(p.Text, "%")[0], 10, 32)
+			if err != nil {
+				log.Printf("Failed to parse GetImageFile progress percentage: %s", p.Text)
+				return
+			}
+			req.ProgressPercent = uint32(percent)
+			req.Status = pb.ContainerExportProgress_EXPORTING
+			_, err = s.listenerClient.UpdateExportStatus(context.Background(), req)
+			if err != nil {
+				log.Printf("Could not update GetImageFile status on host: %v", err)
+				return
+			}
+		},
+	}
+
+	// Download the image
+	_, err = s.lxd.GetImageFile(fingerprint, reqExport)
+	if err != nil {
+		os.Remove(exportFilename)
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to get image file %s: %v", fingerprint, err)
+		return
+	}
+
+	// Delete image.
+	op, err = s.lxd.DeleteImage(fingerprint)
+	if err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error deleting image %s: %v", fingerprint, err)
+		return
+	}
+	if err = op.Wait(); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error waiting to delete image %s: %v", fingerprint, err)
+		return
+	}
+
+	req.Status = pb.ContainerExportProgress_DONE
+}
+
+// ExportContainer implements tremplin.ExportContainer.
+func (s *tremplinServer) ExportContainer(ctx context.Context, in *pb.ExportContainerRequest) (*pb.ExportContainerResponse, error) {
+	log.Printf("Received ExportContainer RPC: %s %s", in.ContainerName, in.ExportPath)
+
+	go s.exportContainer(in.ContainerName, in.ExportPath)
+	response := &pb.ExportContainerResponse{
+		Status: pb.ExportContainerResponse_EXPORTING,
+	}
 	return response, nil
 }
