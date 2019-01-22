@@ -28,8 +28,9 @@ import (
 )
 
 const (
-	backupSnapshot = "rootfs-backup"
-	shiftSnapshot  = "rootfs-shift"
+	backupSnapshot      = "rootfs-backup"
+	importContainerName = "rootfs-import"
+	shiftSnapshot       = "rootfs-shift"
 )
 
 // downloadRegexp extracts the download type and progress percentage from
@@ -157,14 +158,14 @@ func (s *tremplinServer) execProgram(containerName string, args []string) (ret i
 // createSnapshot creates a snapshot with snapshotName for containerName.
 // Any existing snapshot with the existing snapshotName is deleted first.
 func (s *tremplinServer) createSnapshot(containerName, snapshotName string) error {
-	snapshots, err := s.lxd.GetContainerSnapshots(containerName)
+	names, err := s.lxd.GetContainerSnapshotNames(containerName)
 	if err != nil {
-		return fmt.Errorf("failed to get container snapshots: %v", err)
+		return fmt.Errorf("failed to get container snapshot names: %v", err)
 	}
 
 	// Delete any existing snapshot with the same name.
-	for _, snapshot := range snapshots {
-		if snapshot.Name == snapshotName {
+	for _, name := range names {
+		if name == snapshotName {
 			op, err := s.lxd.DeleteContainerSnapshot(containerName, snapshotName)
 			if err != nil {
 				return fmt.Errorf("failed to delete existing snapshot %s: %v", snapshotName, err)
@@ -939,6 +940,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	}
 
 	req.Status = pb.ContainerExportProgress_DONE
+	log.Printf("ExportContainer done")
 }
 
 // ExportContainer implements tremplin.ExportContainer.
@@ -948,6 +950,161 @@ func (s *tremplinServer) ExportContainer(ctx context.Context, in *pb.ExportConta
 	go s.exportContainer(in.ContainerName, in.ExportPath)
 	response := &pb.ExportContainerResponse{
 		Status: pb.ExportContainerResponse_EXPORTING,
+	}
+	return response, nil
+}
+
+// deleteContainer deletes a container if it exists.
+func (s *tremplinServer) deleteContainer(containerName string) error {
+	// Ignore any error from GetContainer.
+	c, _, _ := s.lxd.GetContainer(containerName)
+	if c != nil {
+		op, err := s.lxd.DeleteContainer(containerName)
+		if err != nil {
+			return err
+		}
+		if err = op.Wait(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *tremplinServer) importContainer(containerName, importPath string) {
+	req := &pb.ContainerImportProgress{
+		ContainerName: containerName,
+	}
+
+	// The host must be informed of the final outcome, so ensure it's updated
+	// on every exit path.
+	defer func() {
+		if req == nil {
+			return
+		}
+		_, err := s.listenerClient.UpdateImportStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not update import status on host: %v", err)
+			return
+		}
+	}()
+
+	// Import image.
+	importFilename := filepath.Join("/mnt/shared", importPath)
+	importFile, err := os.Open(importFilename)
+	if err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to open import file %s: %v", importFilename, err)
+		return
+	}
+	defer importFile.Close()
+	fi, err := importFile.Stat()
+	if err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to stat import file %s: %v", importFilename, err)
+		return
+	}
+	// Create ProgressReader as a wrapper for importFile.
+	// LXC ignores ProgressReader in CreateImage for a unified image.
+	progressReader := &ioprogress.ProgressReader{
+		ReadCloser: importFile,
+		Tracker: &ioprogress.ProgressTracker{
+			Length: fi.Size(),
+			Handler: func(percent int64, speed int64) {
+				log.Printf("CreateImage progress percent: %d", percent)
+			},
+		},
+	}
+	createArgs := &lxd.ImageCreateArgs{
+		MetaFile: progressReader,
+	}
+	op, err := s.lxd.CreateImage(api.ImagesPost{}, createArgs)
+	if err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to create image file %s: %v", importFilename, err)
+		return
+	}
+	if err = op.Wait(); err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error waiting to create image %s: %v", importFilename, err)
+		return
+	}
+	opAPI := op.Get()
+	// Grab the fingerprint.
+	fingerprint := opAPI.Metadata["fingerprint"].(string)
+
+	// Ensure image is deleted when we are complete or on error.
+	defer func() {
+		op, err = s.lxd.DeleteImage(fingerprint)
+		if err != nil {
+			req.Status = pb.ContainerImportProgress_FAILED
+			req.FailureReason = fmt.Sprintf("error deleting image %s: %v", fingerprint, err)
+			return
+		}
+		if err = op.Wait(); err != nil {
+			req.Status = pb.ContainerImportProgress_FAILED
+			req.FailureReason = fmt.Sprintf("error waiting to delete image %s: %v", fingerprint, err)
+			return
+		}
+	}()
+
+	// Delete temp 'rootfs-import' if it exists.
+	if err = s.deleteContainer(importContainerName); err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error deleting existing container %s: %v", importContainerName, err)
+		return
+	}
+
+	// Create a new temp 'rootfs-import' container from the image.
+	imgInfo := api.Image{
+		Fingerprint: fingerprint,
+	}
+	reqInit := api.ContainersPost{
+		Name: importContainerName,
+	}
+	opRemote, err := s.lxd.CreateContainerFromImage(s.lxd, imgInfo, reqInit)
+	if err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error creating container %s from image %s: %v", importContainerName, fingerprint, err)
+		return
+	}
+	// TODO: Track progress for CreateContainerFromImage.
+	if err = opRemote.Wait(); err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error waiting to create container %s from image %s: %v", importContainerName, fingerprint, err)
+		return
+	}
+
+	// Delete container <containerName> if it exists.
+	if err = s.deleteContainer(containerName); err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error deleting existing container %s: %v", containerName, err)
+		return
+	}
+
+	// Rename 'rootfs-import' to <containerName>.
+	op, err = s.lxd.RenameContainer(importContainerName, api.ContainerPost{Name: containerName})
+	if err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error renaming container %s to %s: %v", importContainerName, containerName, err)
+		return
+	}
+	if err = op.Wait(); err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error waiting to rename container %s to %s: %v", importContainerName, containerName, err)
+		return
+	}
+
+	req.Status = pb.ContainerImportProgress_DONE
+	log.Printf("ImportContainer done")
+}
+
+// ImportContainer implements tremplin.ImportContainer.
+func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportContainerRequest) (*pb.ImportContainerResponse, error) {
+	log.Printf("Received ImportContainer RPC: %s %s", in.ContainerName, in.ImportPath)
+
+	go s.importContainer(in.ContainerName, in.ImportPath)
+	response := &pb.ImportContainerResponse{
+		Status: pb.ImportContainerResponse_IMPORTING,
 	}
 	return response, nil
 }
