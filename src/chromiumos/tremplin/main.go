@@ -35,6 +35,7 @@ const (
 	defaultHostPort        = "7778"
 	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
 	devDriPath             = "/dev/dri"
+	devSndPath             = "/dev/snd"
 	milestonePath          = "/run/cros_milestone" // path to the file containing the Chrome OS milestone
 )
 
@@ -146,23 +147,25 @@ func initProfile(c lxd.ContainerServer) error {
 		return err
 	}
 
-	filepath.Walk(devDriPath, func(path string, f os.FileInfo, err error) error {
-		if err != nil {
+	for _, devPath := range []string{devDriPath, devSndPath} {
+		filepath.Walk(devPath, func(path string, f os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			if path != devPath && f.IsDir() {
+				return filepath.SkipDir
+			}
+			if f.Mode()&os.ModeCharDevice != os.ModeCharDevice {
+				return nil
+			}
+			defaultProfile.Devices[f.Name()] = map[string]string{
+				"source": path,
+				"mode":   "0666",
+				"type":   "unix-char",
+			}
 			return nil
-		}
-		if path != devDriPath && f.IsDir() {
-			return filepath.SkipDir
-		}
-		if f.Mode()&os.ModeCharDevice != os.ModeCharDevice {
-			return nil
-		}
-		defaultProfile.Devices[f.Name()] = map[string]string{
-			"source": path,
-			"mode":   "0666",
-			"type":   "unix-char",
-		}
-		return nil
-	})
+		})
+	}
 
 	profile, etag, err := c.GetProfile(defaultProfileName)
 	// Assume on error that the profile doesn't exist.
