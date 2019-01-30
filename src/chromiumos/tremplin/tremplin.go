@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -835,6 +834,16 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 	return response, nil
 }
 
+// seekingProgressWriter adds a nop Seek function to ioprogress.ProgressWriter
+// and allows it to be used for the export download in ImageFileRequest.
+type seekingProgressWriter struct {
+	*ioprogress.ProgressWriter
+}
+
+func (w *seekingProgressWriter) Seek(offset int64, whence int) (int64, error) {
+	return offset, nil
+}
+
 func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	req := &pb.ContainerExportProgress{
 		ContainerName: containerName,
@@ -860,9 +869,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		return
 	}
 
-	// Publish.  TODO(joelhockey): Update lxc code to:
-	// 1. Add support for publish ProgressHandler.
-	// 2. Return success and provide fingerprint if image already exists.
+	// Publish.
 	reqPublish := api.ImagesPost{
 		Source: &api.ImagesPostSource{
 			Type: "snapshot",
@@ -875,14 +882,55 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		req.FailureReason = fmt.Sprintf("failed to publish: %v", err)
 		return
 	}
-	if err = op.Wait(); err != nil {
+	op.AddHandler(func(op api.Operation) {
+		stage, stageOK := op.Metadata["progress_stage"]
+		percent, percentOK := op.Metadata["progress_percent"]
+		speed, speedOK := op.Metadata["progress_speed"]
+		if !stageOK || !percentOK || !speedOK {
+			return
+		}
+		i, err := strconv.ParseUint(percent.(string), 10, 32)
+		if err != nil {
+			log.Printf("Could not parse CreateImage progress percent: %v", err)
+			return
+		}
+		req.ProgressPercent = uint32(i)
+		req.ProgressSpeed, err = strconv.ParseUint(speed.(string), 10, 64)
+		if err != nil {
+			log.Printf("Could not parse CreateImage progress speed: %v", err)
+			return
+		}
+		switch stage {
+		case "create_image_from_container_tar":
+			req.Status = pb.ContainerExportProgress_EXPORTING_TAR
+		case "create_image_from_container_compress":
+			req.Status = pb.ContainerExportProgress_EXPORTING_COMPRESS
+		default:
+			log.Printf("Unknown CreateImage stage: %v", stage)
+			return
+		}
+		_, err = s.listenerClient.UpdateExportStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not update CreateImage status on host: %v", err)
+			return
+		}
+	})
+	var fingerprint string
+	size := int64(-1)
+	// An error for wait is only a problem if fingerprint and size are not
+	// returned.  If the image already exists, we can continue with export.
+	err = op.Wait()
+	if f, ok := op.Get().Metadata["fingerprint"]; ok {
+		fingerprint = f.(string)
+	}
+	if s, ok := op.Get().Metadata["size"]; ok {
+		size, _ = strconv.ParseInt(s.(string), 10, 64)
+	}
+	if fingerprint == "" || size == -1 {
 		req.Status = pb.ContainerExportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed waiting to publish: %v", err)
 		return
 	}
-	opAPI := op.Get()
-	// Grab the fingerprint
-	fingerprint := opAPI.Metadata["fingerprint"].(string)
 
 	// Export image.
 	exportFilename := filepath.Join("/mnt/shared", exportPath, fingerprint+".tar.gz")
@@ -893,31 +941,32 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		return
 	}
 	defer exportFile.Close()
-	// We only need to supply ImageFileRequest.MetaFile and not
-	// ImageFileRequest.RootfsFile.  The exported image is a unified tarball
-	// with metadata and rootfs combined unless the LXD HTTP request to get the
-	// image has "Content-Type: multipart/form-data".
-	// https://github.com/lxc/lxd/blob/6802d7f73cf44fda6284fd8e657038e37d84e762/client/lxd_images.go#L197
-	reqExport := lxd.ImageFileRequest{
-		MetaFile: io.WriteSeeker(exportFile),
-		ProgressHandler: func(p ioprogress.ProgressData) {
-			// Parse percent from "74% (27.28MB/s)".
-			percent, err := strconv.ParseUint(strings.Split(p.Text, "%")[0], 10, 32)
-			if err != nil {
-				log.Printf("Failed to parse GetImageFile progress percentage: %s", p.Text)
-				return
-			}
-			req.ProgressPercent = uint32(percent)
-			req.Status = pb.ContainerExportProgress_EXPORTING
-			_, err = s.listenerClient.UpdateExportStatus(context.Background(), req)
-			if err != nil {
-				log.Printf("Could not update GetImageFile status on host: %v", err)
-				return
-			}
-		},
-	}
 
-	// Download the image
+	// Download the image.  We only need to supply ImageFileRequest.MetaFile
+	// and not ImageFileRequest.RootfsFile.  The exported image is a unified
+	// tarball with metadata and rootfs combined unless the LXD HTTP request
+	// to get the image has "Content-Type: multipart/form-data".
+	// https://github.com/lxc/lxd/blob/6802d7f73cf44fda6284fd8e657038e37d84e762/client/lxd_images.go#L197
+	// Use a ProgressWriter as a wrapper for exportFile.
+	log.Printf("Downloading image %s to %s, size=%d", fingerprint, exportFile.Name(), size)
+	reqExport := lxd.ImageFileRequest{
+		MetaFile: &seekingProgressWriter{&ioprogress.ProgressWriter{
+			WriteCloser: exportFile,
+			Tracker: &ioprogress.ProgressTracker{
+				Length: size,
+				Handler: func(percent, speed int64) {
+					req.ProgressPercent = uint32(percent)
+					req.ProgressSpeed = uint64(speed)
+					req.Status = pb.ContainerExportProgress_EXPORTING_DOWNLOAD
+					_, err = s.listenerClient.UpdateExportStatus(context.Background(), req)
+					if err != nil {
+						log.Printf("Could not update GetImageFile status on host: %v", err)
+						return
+					}
+				},
+			},
+		}},
+	}
 	_, err = s.lxd.GetImageFile(fingerprint, reqExport)
 	if err != nil {
 		os.Remove(exportFilename)
@@ -1003,19 +1052,25 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		req.FailureReason = fmt.Sprintf("failed to stat import file %s: %v", importFilename, err)
 		return
 	}
-	// Create ProgressReader as a wrapper for importFile.
-	// LXC ignores ProgressReader in CreateImage for a unified image.
-	progressReader := &ioprogress.ProgressReader{
-		ReadCloser: importFile,
-		Tracker: &ioprogress.ProgressTracker{
-			Length: fi.Size(),
-			Handler: func(percent int64, speed int64) {
-				log.Printf("CreateImage progress percent: %d", percent)
+
+	// Use a ProgressReader as a wrapper for importFile.
+	createArgs := &lxd.ImageCreateArgs{
+		MetaFile: &ioprogress.ProgressReader{
+			ReadCloser: importFile,
+			Tracker: &ioprogress.ProgressTracker{
+				Length: fi.Size(),
+				Handler: func(percent int64, speed int64) {
+					req.ProgressPercent = uint32(percent)
+					req.ProgressSpeed = uint64(speed)
+					req.Status = pb.ContainerImportProgress_IMPORTING_UPLOAD
+					_, err = s.listenerClient.UpdateImportStatus(context.Background(), req)
+					if err != nil {
+						log.Printf("Could not update CreateImage upload file status on host: %v", err)
+						return
+					}
+				},
 			},
 		},
-	}
-	createArgs := &lxd.ImageCreateArgs{
-		MetaFile: progressReader,
 	}
 	op, err := s.lxd.CreateImage(api.ImagesPost{}, createArgs)
 	if err != nil {
@@ -1023,14 +1078,18 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		req.FailureReason = fmt.Sprintf("failed to create image file %s: %v", importFilename, err)
 		return
 	}
-	if err = op.Wait(); err != nil {
+	var fingerprint string
+	// An error for wait is only a problem if fingerprint and size are not
+	// returned.  If the image already exists, we can continue with import.
+	err = op.Wait()
+	if f, ok := op.Get().Metadata["fingerprint"]; ok {
+		fingerprint = f.(string)
+	}
+	if fingerprint == "" {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("error waiting to create image %s: %v", importFilename, err)
 		return
 	}
-	opAPI := op.Get()
-	// Grab the fingerprint.
-	fingerprint := opAPI.Metadata["fingerprint"].(string)
 
 	// Ensure image is deleted when we are complete or on error.
 	defer func() {
@@ -1067,7 +1126,44 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		req.FailureReason = fmt.Sprintf("error creating container %s from image %s: %v", importContainerName, fingerprint, err)
 		return
 	}
-	// TODO: Track progress for CreateContainerFromImage.
+	// Track progress for CreateContainerFromImage.
+	_, err = opRemote.AddHandler(func(op api.Operation) {
+		stage, stageOK := op.Metadata["progress_stage"]
+		percent, percentOK := op.Metadata["progress_percent"]
+		speed, speedOK := op.Metadata["progress_speed"]
+		if !stageOK || !percentOK || !speedOK {
+			return
+		}
+		i, err := strconv.ParseUint(percent.(string), 10, 32)
+		if err != nil {
+			log.Printf("Could not parse CreateContainerFromImage progress percent: %v", err)
+			return
+		}
+		req.ProgressPercent = uint32(i)
+		req.ProgressSpeed, err = strconv.ParseUint(speed.(string), 10, 64)
+		if err != nil {
+			log.Printf("Could not parse CreateContainerFromImage progress speed: %v", err)
+			return
+		}
+		switch stage {
+		case "create_container_from_image_unpack":
+			req.Status = pb.ContainerImportProgress_IMPORTING_UNPACK
+		default:
+			log.Printf("Unknown CreateContainerFromImage stage: %v", stage)
+			return
+		}
+		_, err = s.listenerClient.UpdateImportStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not update CreateContainerFromImage status on host: %v", err)
+			return
+		}
+	})
+	if err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error adding progress handler: %v", err)
+		return
+	}
+
 	if err = opRemote.Wait(); err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("error waiting to create container %s from image %s: %v", importContainerName, fingerprint, err)
