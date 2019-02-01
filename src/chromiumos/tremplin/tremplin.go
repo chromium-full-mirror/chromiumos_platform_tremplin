@@ -655,10 +655,9 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 			ret, _, _, err := s.execProgram(container.Name, []string{"timedatectl", "set-timezone", s.timezoneName})
 			if err == nil && ret == 0 {
 				// Success! Unset the TZ variable as it takes precedence over the timedatectl setting.
-				container.Config["environment.TZ"] = ""
+				delete(container.Config, "environment.TZ")
 				s.lxd.UpdateContainer(container.Name, container.Writable(), "")
 			}
-
 		}
 	case api.Cancelled, api.Failure:
 		response.Status = pb.StartContainerResponse_FAILED
@@ -917,25 +916,27 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 
 	response := &pb.SetTimezoneResponse{}
 	s.timezoneName = in.TimezoneName
-
-	containers, err := s.lxd.GetContainers()
-	if err != nil {
-		return response, err
-	}
-
-	for _, container := range containers {
-		var failureReasons []string
+	for _, name := range in.ContainerNames {
+		container, _, err := s.lxd.GetContainer(name)
+		if err != nil {
+			response.FailureReasons = append(response.FailureReasons, fmt.Sprintf("could not get container %s: %v", container.Name, err))
+			continue
+		}
+		var errors []string
 		// First option, use timedatectl.
 		ret, _, _, err := s.execProgram(container.Name, []string{"timedatectl", "set-timezone", in.TimezoneName})
 		if err == nil && ret == 0 {
 			response.Successes++
+			// Attempt to unset TZ env variable in case it was set earlier and is now incorrect.
+			delete(container.Config, "environment.TZ")
+			s.lxd.UpdateContainer(container.Name, container.Writable(), "")
 			continue
 		}
-		failureReasons = append(failureReasons, fmt.Sprintf("setting timezone by name failed: (error: %v, return code: %d)", err, ret))
+		errors = append(errors, fmt.Sprintf("setting timezone by name failed: (error: %v, return code: %d)", err, ret))
 
 		// Second option, set the TZ environment variable for this particular container.
 		if in.PosixTzString == "" {
-			failureReasons = append(failureReasons, fmt.Sprintf("setting timezone by TZ variable failed: no POSIX TZ string provided"))
+			errors = append(errors, fmt.Sprintf("setting timezone by TZ variable failed: no POSIX TZ string provided"))
 		} else {
 			container.Config["environment.TZ"] = in.PosixTzString
 			operation, err := s.lxd.UpdateContainer(container.Name, container.Writable(), "")
@@ -947,10 +948,10 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 					continue
 				}
 			}
-			failureReasons = append(failureReasons, fmt.Sprintf("setting timezone by TZ variable failed: %v", err))
+			errors = append(errors, fmt.Sprintf("setting timezone by TZ variable failed: %v", err))
 		}
 
-		response.FailureReasons = append(response.FailureReasons, fmt.Sprintf("container %s: %s", container.Name, strings.Join(failureReasons, ", ")))
+		response.FailureReasons = append(response.FailureReasons, fmt.Sprintf("container %s: %s", container.Name, strings.Join(errors, ", ")))
 	}
 
 	return response, nil
