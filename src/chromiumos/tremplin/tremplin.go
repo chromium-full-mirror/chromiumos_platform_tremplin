@@ -20,7 +20,8 @@ import (
 	"strings"
 
 	pb "chromiumos/vm_tools/tremplin_proto"
-	"github.com/lxc/lxd/client"
+
+	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
 	"github.com/lxc/lxd/shared/ioprogress"
 	"google.golang.org/grpc"
@@ -368,6 +369,128 @@ type bindMount struct {
 	content string
 	source  string
 	dest    string
+}
+
+// DeleteContainer implements tremplin.DeleteContainer.
+func (s *tremplinServer) DeleteContainer(ctx context.Context, in *pb.DeleteContainerRequest) (*pb.DeleteContainerResponse, error) {
+	log.Printf("Received DeleteContainer RPC: %s", in.ContainerName)
+
+	response := &pb.DeleteContainerResponse{}
+
+	container, _, err := s.lxd.GetContainer(in.ContainerName)
+	if container == nil {
+		response.Status = pb.DeleteContainerResponse_DOES_NOT_EXIST
+		return response, nil
+	}
+	if err != nil {
+		response.Status = pb.DeleteContainerResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
+		return response, nil
+	}
+
+	if container.StatusCode == api.Running {
+		reqState := api.ContainerStatePut{
+			Action:  "stop",
+			Timeout: -1,
+			Force:   true,
+		}
+		op, err := s.lxd.UpdateContainerState(container.Name, reqState, "")
+
+		if err != nil {
+			response.Status = pb.DeleteContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to stop container: %v", err)
+			return response, nil
+		}
+
+		_, err = op.AddHandler(func(op api.Operation) { s.handleStopOperation(container.Name, op) })
+
+		if err != nil {
+			response.Status = pb.DeleteContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to add stop operation handler: %v", err)
+			return response, nil
+		}
+	} else {
+		err := s.startDeleteOperation(container.Name)
+		if err != nil {
+			response.Status = pb.DeleteContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to delete container: %v", err)
+			return response, nil
+		}
+	}
+
+	response.Status = pb.DeleteContainerResponse_DELETING
+	return response, nil
+}
+
+func (s *tremplinServer) handleStopOperation(containerName string, op api.Operation) {
+	req := &pb.ContainerDeletionProgress{
+		ContainerName: containerName,
+	}
+
+	switch op.StatusCode {
+	case api.Pending, api.Running:
+		return
+	case api.Success:
+		err := s.startDeleteOperation(containerName)
+		if err == nil {
+			return
+		}
+		req.Status = pb.ContainerDeletionProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to stop container: %v", err)
+	case api.Cancelled:
+		req.Status = pb.ContainerDeletionProgress_CANCELLED
+		req.FailureReason = op.Err
+	case api.Failure:
+		req.Status = pb.ContainerDeletionProgress_FAILED
+		req.FailureReason = op.Err
+	default:
+		req.Status = pb.ContainerDeletionProgress_UNKNOWN
+		req.FailureReason = fmt.Sprintf("unhandled stop status: %s, %s", op.Status, op.Err)
+	}
+
+	_, err := s.listenerClient.UpdateDeletionStatus(context.Background(), req)
+	if err != nil {
+		log.Printf("Could not update deletion status on host: %v", err)
+	}
+}
+
+func (s *tremplinServer) startDeleteOperation(containerName string) (err error) {
+	op, err := s.lxd.DeleteContainer(containerName)
+
+	if err != nil {
+		return err
+	}
+
+	if _, err := op.AddHandler(func(op api.Operation) { s.handleDeleteOperation(containerName, op) }); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *tremplinServer) handleDeleteOperation(containerName string, op api.Operation) {
+	req := &pb.ContainerDeletionProgress{
+		ContainerName: containerName,
+	}
+
+	switch op.StatusCode {
+	case api.Pending, api.Running:
+		return
+	case api.Success:
+		req.Status = pb.ContainerDeletionProgress_DELETED
+	case api.Cancelled:
+		req.Status = pb.ContainerDeletionProgress_CANCELLED
+		req.FailureReason = op.Err
+	case api.Failure:
+		req.Status = pb.ContainerDeletionProgress_FAILED
+		req.FailureReason = op.Err
+	default:
+		req.Status = pb.ContainerDeletionProgress_UNKNOWN
+		req.FailureReason = fmt.Sprintf("unhandled deletion status: %s, %s", op.Status, op.Err)
+	}
+
+	if _, err := s.listenerClient.UpdateDeletionStatus(context.Background(), req); err != nil {
+		log.Printf("Could not update deletion status on host: %v", err)
+	}
 }
 
 // StartContainer implements tremplin.StartContainer.
