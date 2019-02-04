@@ -134,6 +134,11 @@ func initProfile(c lxd.ContainerServer) error {
 				"mode":   "0666",
 				"type":   "unix-char"
 			},
+			"tun": {
+				"source": "/dev/net/tun",
+				"mode":   "0666",
+				"type":   "unix-char"
+			},
 			"wl0": {
 				"source": "/dev/wl0",
 				"mode":   "0666",
