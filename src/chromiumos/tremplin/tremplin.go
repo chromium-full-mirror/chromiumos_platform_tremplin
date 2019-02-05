@@ -844,6 +844,52 @@ func (w *seekingProgressWriter) Seek(offset int64, whence int) (int64, error) {
 	return offset, nil
 }
 
+// getProgress gets stage, percent, speed from the operation metadata.
+func getProgress(op api.Operation) (stage string, percent uint32, speed uint64, ok bool) {
+	// Get 'progress' from Metadata as map[string]interface{}.
+	progress, ok := op.Metadata["progress"]
+	if !ok {
+		return
+	}
+	progressMap, ok := progress.(map[string]interface{})
+	if !ok {
+		log.Printf("Could not convert progress map to map[string]interface{}, got: %v", reflect.TypeOf(progress))
+		return
+	}
+
+	// Get 'stage', 'percent', 'speed' as strings.
+	stageVal, stageOK := progressMap["stage"]
+	percentVal, percentOK := progressMap["percent"]
+	speedVal, speedOK := progressMap["speed"]
+	ok = stageOK && percentOK && speedOK
+	if !ok {
+		log.Printf("Progress map found fields stage=%v, percent=%v, speed=%v", stageOK, percentOK, speedOK)
+		return
+	}
+	stage, stageOK = stageVal.(string)
+	percentStr, percentOK := percentVal.(string)
+	speedStr, speedOK := speedVal.(string)
+	ok = stageOK && percentOK && speedOK
+	if !ok {
+		log.Printf("Progress map could not convert fields to string, got stage=%v, percent=%v, speed=%v", reflect.TypeOf(stageVal), reflect.TypeOf(percentVal), reflect.TypeOf(speedVal))
+		return
+	}
+
+	// Convert percent to uint32, speed to uint64.
+	percent64, err := strconv.ParseUint(percentStr, 10, 32)
+	if err != nil {
+		ok = false
+		log.Printf("Could not parse progress percent: %v", err)
+	}
+	percent = uint32(percent64)
+	speed, err = strconv.ParseUint(speedStr, 10, 64)
+	if err != nil {
+		ok = false
+		log.Printf("Could not parse progress speed: %v", err)
+	}
+	return
+}
+
 func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	req := &pb.ContainerExportProgress{
 		ContainerName: containerName,
@@ -883,23 +929,12 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		return
 	}
 	op.AddHandler(func(op api.Operation) {
-		stage, stageOK := op.Metadata["progress_stage"]
-		percent, percentOK := op.Metadata["progress_percent"]
-		speed, speedOK := op.Metadata["progress_speed"]
-		if !stageOK || !percentOK || !speedOK {
+		stage, percent, speed, ok := getProgress(op)
+		if !ok {
 			return
 		}
-		i, err := strconv.ParseUint(percent.(string), 10, 32)
-		if err != nil {
-			log.Printf("Could not parse CreateImage progress percent: %v", err)
-			return
-		}
-		req.ProgressPercent = uint32(i)
-		req.ProgressSpeed, err = strconv.ParseUint(speed.(string), 10, 64)
-		if err != nil {
-			log.Printf("Could not parse CreateImage progress speed: %v", err)
-			return
-		}
+		req.ProgressPercent = percent
+		req.ProgressSpeed = speed
 		switch stage {
 		case "create_image_from_container_tar":
 			req.Status = pb.ContainerExportProgress_EXPORTING_TAR
@@ -932,13 +967,23 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		return
 	}
 
-	// Export image.
-	exportFilename := filepath.Join("/mnt/shared", exportPath, fingerprint+".tar.gz")
+	// Export image.  If exportPath is a directory, then name file
+	// <fingerprint>.tar.gz, otherwise use filename given.
+	// We do not have priv to stat, so attempt to create a file with
+	// the given path, if that fails, append <fingerprint>.tar.gz.
+	exportFilename := filepath.Join("/mnt/shared", exportPath)
 	exportFile, err := os.Create(exportFilename)
 	if err != nil {
-		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to create export file %s: %v", exportFilename, err)
-		return
+		// Assume Create failed because this is a directory.
+		// Try <exportPath>/<fingerprint>.tar.gz.
+		exportFilenameDir := filepath.Join(exportFilename, fingerprint+".tar.gz")
+		var errDir error
+		exportFile, errDir = os.Create(exportFilenameDir)
+		if errDir != nil {
+			req.Status = pb.ContainerExportProgress_FAILED
+			req.FailureReason = fmt.Sprintf("failed to create export file as %s: %v, or as %s: %v", exportFilename, err, exportFilenameDir, errDir)
+			return
+		}
 	}
 	defer exportFile.Close()
 
@@ -1128,23 +1173,12 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 	}
 	// Track progress for CreateContainerFromImage.
 	_, err = opRemote.AddHandler(func(op api.Operation) {
-		stage, stageOK := op.Metadata["progress_stage"]
-		percent, percentOK := op.Metadata["progress_percent"]
-		speed, speedOK := op.Metadata["progress_speed"]
-		if !stageOK || !percentOK || !speedOK {
+		stage, percent, speed, ok := getProgress(op)
+		if !ok {
 			return
 		}
-		i, err := strconv.ParseUint(percent.(string), 10, 32)
-		if err != nil {
-			log.Printf("Could not parse CreateContainerFromImage progress percent: %v", err)
-			return
-		}
-		req.ProgressPercent = uint32(i)
-		req.ProgressSpeed, err = strconv.ParseUint(speed.(string), 10, 64)
-		if err != nil {
-			log.Printf("Could not parse CreateContainerFromImage progress speed: %v", err)
-			return
-		}
+		req.ProgressPercent = percent
+		req.ProgressSpeed = speed
 		switch stage {
 		case "create_container_from_image_unpack":
 			req.Status = pb.ContainerImportProgress_IMPORTING_UNPACK
