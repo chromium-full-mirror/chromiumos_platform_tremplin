@@ -1059,10 +1059,8 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		req.ProgressPercent = percent
 		req.ProgressSpeed = speed
 		switch stage {
-		case "create_image_from_container_tar":
-			req.Status = pb.ContainerExportProgress_EXPORTING_TAR
-		case "create_image_from_container_compress":
-			req.Status = pb.ContainerExportProgress_EXPORTING_COMPRESS
+		case "create_image_from_container_pack":
+			req.Status = pb.ContainerExportProgress_EXPORTING_PACK
 		default:
 			log.Printf("Unknown CreateImage stage: %v", stage)
 			return
