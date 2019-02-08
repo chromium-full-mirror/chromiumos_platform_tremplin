@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -31,6 +32,11 @@ const (
 	backupSnapshot      = "rootfs-backup"
 	importContainerName = "rootfs-import"
 	shiftSnapshot       = "rootfs-shift"
+
+	lingerPath         = "/var/lib/systemd/linger"
+	primaryUserID      = 1000
+	androidRootID      = 655360
+	androidEverybodyID = 665357
 )
 
 // downloadRegexp extracts the download type and progress percentage from
@@ -673,54 +679,31 @@ func (s *tremplinServer) GetContainerUsername(ctx context.Context, in *pb.GetCon
 
 	response := &pb.GetContainerUsernameResponse{}
 
-	c, _, err := s.lxd.GetContainer(in.ContainerName)
+	_, _, err := s.lxd.GetContainer(in.ContainerName)
 	if err != nil {
 		response.Status = pb.GetContainerUsernameResponse_CONTAINER_NOT_FOUND
 		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
 		return response, nil
 	}
-	if c.StatusCode != api.Running {
-		response.Status = pb.GetContainerUsernameResponse_CONTAINER_NOT_RUNNING
-		response.FailureReason = fmt.Sprintf("container not running, status is: %d", c.StatusCode)
-		return response, nil
-	}
 
-	// Get username.
-	ret, stdout, stderr, err := s.execProgram(in.ContainerName, []string{"id", "-nu", "1000"})
+	pd, err := NewPasswdDatabase(s.lxd, in.ContainerName)
 	if err != nil {
 		response.Status = pb.GetContainerUsernameResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to run id program: %v", err)
+		response.FailureReason = fmt.Sprintf("failed to get container passwd db: %v", err)
 		return response, nil
 	}
-	if ret != 0 {
-		response.Status = pb.GetContainerUsernameResponse_USER_NOT_FOUND
-		response.FailureReason = fmt.Sprintf("failed to get user for uid: %v", stderr)
-		return response, nil
-	}
-	response.Username = strings.TrimSpace(stdout)
 
-	// Get homedir.  It is section 6 of passwd entry.  E.g.:
-	// testuser:x:1000:1000::/home/testuser:/bin/bash
-	ret, stdout, stderr, err = s.execProgram(in.ContainerName, []string{"getent", "passwd", response.Username})
-	if err != nil {
-		response.Status = pb.GetContainerUsernameResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to run getent program: %v", err)
-		return response, nil
-	}
-	if ret != 0 {
+	p := pd.PasswdForUid(primaryUserID)
+	if p == nil {
 		response.Status = pb.GetContainerUsernameResponse_USER_NOT_FOUND
-		response.FailureReason = fmt.Sprintf("failed to get passwd entry: %v", stderr)
+		response.FailureReason = "failed to find user for uid"
 		return response, nil
 	}
-	parts := strings.Split(strings.TrimSpace(stdout), ":")
-	if len(parts) <= 5 {
-		response.Status = pb.GetContainerUsernameResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to parse homedir in passwd entry: %v", stdout)
-		return response, nil
-	}
-	response.Homedir = parts[5]
 
+	response.Username = p.Name
+	response.Homedir = p.Homedir
 	response.Status = pb.GetContainerUsernameResponse_SUCCESS
+
 	return response, nil
 }
 
@@ -729,131 +712,104 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	log.Printf("Received SetUpUser RPC: %s", in.ContainerName)
 
 	response := &pb.SetUpUserResponse{}
-	response.Username = in.ContainerUsername
 
-	// Groups for user 1000.
-	var groups []string
-
-	// Create gid 655360 (android-root) if it doesn't already exist.
-	ret, stdout, stderr, err := s.execProgram(in.ContainerName, []string{"getent", "group", "655360"})
+	pd, err := NewPasswdDatabase(s.lxd, in.ContainerName)
 	if err != nil {
 		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to check android-root gid: %v", err)
+		response.FailureReason = fmt.Sprintf("failed to get container passwd db: %v", err)
 		return response, nil
-	}
-	if ret != 0 {
-		ret, _, stderr, err = s.execProgram(in.ContainerName,
-			[]string{"groupadd", "-g", "655360", "android-root"})
-		if err != nil {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to run android-root groupadd: %v", err)
-			return response, nil
-		}
-		if ret != 0 {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to add android-root group: %s", stderr)
-			return response, nil
-		}
 	}
 
-	// Create uid 655360 (android-root) if it doesn't already exist.
-	// Set group to android-root, home=/dev/null, shell=/bin/false.
-	ret, _, stderr, err = s.execProgram(in.ContainerName, []string{"id", "-nu", "655360"})
-	if err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to check android-root uid: %v", err)
-		return response, nil
-	}
-	if ret != 0 {
-		ret, _, stderr, err = s.execProgram(in.ContainerName,
-			[]string{"useradd", "-u", "655360", "-g", "android-root", "-d", "/dev/null", "-s", "/bin/false", "android-root"})
-		if err != nil {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to run android-root useradd: %v", err)
-			return response, nil
-		}
-		if ret != 0 {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to add android-root user: %s", stderr)
-			return response, nil
-		}
-	}
-
-	// Create gid 665357 (android-everybody) if it doesn't already exist.
-	ret, _, stderr, err = s.execProgram(in.ContainerName, []string{"getent", "group", "665357"})
-	if err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to check android-everybody gid: %v", err)
-		return response, nil
-	}
-	if ret != 0 {
-		ret, _, stderr, err = s.execProgram(in.ContainerName,
-			[]string{"groupadd", "-g", "665357", "android-everybody"})
-		if err != nil {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to run android-everybody groupadd: %v", err)
-			return response, nil
-		}
-		if ret != 0 {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to add android-everybody group: %s", stderr)
-			return response, nil
-		}
-		groups = append(groups, "android-everybody")
-	}
-
-	// Create uid 1000 if it doesn't already exist.
-	ret, stdout, stderr, err = s.execProgram(in.ContainerName, []string{"id", "-nu", "1000"})
-	if err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to check 1000 uid: %v", err)
-		return response, nil
-	}
-	if ret == 0 {
-		// User already exists, capture username.
-		response.Username = strings.TrimSpace(stdout)
+	p := pd.PasswdForUid(primaryUserID)
+	if p != nil {
+		response.Username = p.Name
 	} else {
-		ret, _, stderr, err = s.execProgram(in.ContainerName,
-			[]string{"useradd", "-u", "1000", "-s", "/bin/bash", "-m", in.ContainerUsername})
+		response.Username = in.ContainerUsername
+	}
+
+	if err := pd.EnsureUserExists(response.Username, primaryUserID, true); err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to ensure primary user exists: %v", err)
+		return response, nil
+	}
+
+	if err := pd.EnsureUserExists("android-root", androidRootID, false); err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to create android-root: %v", err)
+		return response, nil
+	}
+
+	pd.EnsureGroupExists("android-everybody", androidEverybodyID)
+
+	groups := []struct {
+		name     string
+		required bool
+	}{
+		{"android-everybody", true},
+		{"audio", false},
+		{"cdrom", false},
+		{"dialout", false},
+		{"floppy", false},
+		{"plugdev", false},
+		{"sudo", false},
+		{"users", false},
+		{"video", false},
+	}
+
+	for _, group := range groups {
+		pd.EnsureUserInGroup(response.Username, group.name, group.required)
+	}
+
+	if err := pd.Save(); err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to save passwd db: %v", err)
+		return response, nil
+	}
+
+	container, _, err := s.lxd.GetContainer(in.ContainerName)
+	if err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
+		return response, nil
+	}
+
+	// Enable loginctl linger for the target user. If running, use loginctl to
+	// kick and start a user session.
+	if err := pd.lxd.CreateContainerFile(in.ContainerName, lingerPath, lxd.ContainerFileArgs{
+		UID:  0,
+		GID:  0,
+		Mode: 0755,
+		Type: "directory",
+	}); err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to create linger dir: %v", err)
+		return response, nil
+	}
+	userLingerPath := path.Join(lingerPath, response.Username)
+	if err := pd.lxd.CreateContainerFile(in.ContainerName, userLingerPath, lxd.ContainerFileArgs{
+		UID:  0,
+		GID:  0,
+		Mode: 0644,
+		Type: "file",
+	}); err != nil {
+		response.Status = pb.SetUpUserResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to create linger file: %v", err)
+		return response, nil
+	}
+
+	if container.StatusCode == api.Running {
+		ret, _, stderr, err := s.execProgram(in.ContainerName,
+			[]string{"loginctl", "enable-linger", response.Username})
 		if err != nil {
 			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to run 1000 useradd: %v", err)
+			response.FailureReason = fmt.Sprintf("failed to run loginctl: %v", err)
 			return response, nil
 		}
 		if ret != 0 {
 			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to add 1000 user: %s", stderr)
+			response.FailureReason = fmt.Sprintf("failed to enable linger: %s", stderr)
 			return response, nil
 		}
-		groups = append(groups,
-			"audio",
-			"cdrom",
-			"dialout",
-			"floppy",
-			"plugdev",
-			"sudo",
-			"users",
-			"video")
-	}
-
-	// Add groups, but don't fail - groups might not exist in the container.
-	for _, group := range groups {
-		ret, _, stderr, _ = s.execProgram(in.ContainerName,
-			[]string{"usermod", "-aG", group, response.Username})
-	}
-
-	// Enable loginctl linger for the target user.
-	ret, _, stderr, err = s.execProgram(in.ContainerName,
-		[]string{"loginctl", "enable-linger", response.Username})
-	if err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to run loginctl: %v", err)
-		return response, nil
-	}
-	if ret != 0 {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to enable linger: %s", stderr)
-		return response, nil
 	}
 
 	response.Status = pb.SetUpUserResponse_SUCCESS
