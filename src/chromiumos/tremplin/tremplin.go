@@ -59,13 +59,7 @@ func getContainerName(s string) (string, error) {
 
 // getDownloadPercentage extracts the download progress (as a percentage)
 // from an api.Operation's Metadata map.
-func getDownloadPercentage(opMetadata map[string]interface{}) (int32, error) {
-	progress, ok := opMetadata["download_progress"].(string)
-	if !ok {
-		// If there's no progress metadata, the download hasn't started yet.
-		return 0, nil
-	}
-
+func getDownloadPercentage(progress string) (int32, error) {
 	matches := downloadRegexp.FindStringSubmatch(progress)
 	if matches == nil {
 		return 0, fmt.Errorf("didn't find download status in %q", progress)
@@ -284,12 +278,17 @@ func (s *tremplinServer) handleCreateOperation(op api.Operation) {
 		req.Status = pb.ContainerCreationProgress_CREATED
 	case api.Running:
 		req.Status = pb.ContainerCreationProgress_DOWNLOADING
-		downloadPercent, err := getDownloadPercentage(op.Metadata)
-		if err != nil {
-			log.Printf("Failed to parse download percentage: %v", err)
+		progress, ok := op.Metadata["download_progress"].(string)
+		if ok {
+			downloadPercent, err := getDownloadPercentage(progress)
+			if err != nil {
+				log.Printf("Failed to parse download percentage: %v", err)
+				return
+			}
+			req.DownloadProgress = downloadPercent
+		} else {
 			return
 		}
-		req.DownloadProgress = downloadPercent
 	case api.Cancelled, api.Failure:
 		req.Status = pb.ContainerCreationProgress_FAILED
 		req.FailureReason = op.Err
