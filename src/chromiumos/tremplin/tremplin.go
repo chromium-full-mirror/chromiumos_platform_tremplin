@@ -1034,7 +1034,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	// Create a snapshot for export.  It is OK if the container is running.
 	if err := s.createSnapshot(containerName, backupSnapshot); err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to create backup snapshot: %v", err)
+		req.FailureReason = fmt.Sprintf("failed to create backup snapshot %s/%s: %v", containerName, backupSnapshot, err)
 		return
 	}
 
@@ -1048,7 +1048,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	op, err := s.lxd.CreateImage(reqPublish, nil)
 	if err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to publish: %v", err)
+		req.FailureReason = fmt.Sprintf("failed to publish snapshot %s/%s: %v", containerName, backupSnapshot, err)
 		return
 	}
 	op.AddHandler(func(op api.Operation) {
@@ -1084,7 +1084,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	}
 	if fingerprint == "" || size == -1 {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed waiting to publish: %v", err)
+		req.FailureReason = fmt.Sprintf("failed waiting to publish snapshot %s/%s: %v", containerName, backupSnapshot, err)
 		return
 	}
 
@@ -1173,14 +1173,28 @@ func (s *tremplinServer) ExportContainer(ctx context.Context, in *pb.ExportConta
 func (s *tremplinServer) deleteContainer(containerName string) error {
 	// Ignore any error from GetContainer.
 	c, _, _ := s.lxd.GetContainer(containerName)
-	if c != nil {
-		op, err := s.lxd.DeleteContainer(containerName)
-		if err != nil {
-			return err
+	if c == nil {
+		log.Printf("Ignoring request to delete non-existent container %s", containerName)
+		return nil
+	}
+	if c.StatusCode != 0 && c.StatusCode != api.Stopped {
+		log.Printf("Force stopping container %s before deleting", containerName)
+		reqState := api.ContainerStatePut{
+			Action:  "stop",
+			Timeout: -1,
+			Force:   true,
 		}
+		op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
 		if err = op.Wait(); err != nil {
 			return err
 		}
+	}
+	op, err := s.lxd.DeleteContainer(containerName)
+	if err != nil {
+		return err
+	}
+	if err = op.Wait(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1238,6 +1252,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 			},
 		},
 	}
+	log.Printf("Uploading image from file %s, size=%d", importFilename, fi.Size())
 	op, err := s.lxd.CreateImage(api.ImagesPost{}, createArgs)
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
@@ -1286,6 +1301,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 	reqInit := api.ContainersPost{
 		Name: importContainerName,
 	}
+	log.Printf("Creating temp container %s from image", importContainerName)
 	opRemote, err := s.lxd.CreateContainerFromImage(s.lxd, imgInfo, reqInit)
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
@@ -1325,6 +1341,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		return
 	}
 
+	log.Printf("Deleting container %s and replacing from temp container %s", containerName, importContainerName)
 	// Delete container <containerName> if it exists.
 	if err = s.deleteContainer(containerName); err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
