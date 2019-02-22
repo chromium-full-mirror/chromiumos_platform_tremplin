@@ -471,6 +471,10 @@ func main() {
 		transactionMap: *NewTransactionMap(),
 	}
 
+	if err := startAuditListener(&server); err != nil {
+		log.Fatalf("Failed to start audit listener: %v", err)
+	}
+
 	pb.RegisterTremplinServer(server.grpcServer, &server)
 	reflection.Register(server.grpcServer)
 
