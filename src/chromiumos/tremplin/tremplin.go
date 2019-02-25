@@ -35,6 +35,7 @@ const (
 
 	lingerPath         = "/var/lib/systemd/linger"
 	primaryUserID      = 1000
+	chronosAccessID    = 1001
 	androidRootID      = 655360
 	androidEverybodyID = 665357
 )
@@ -740,12 +741,14 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	}
 
 	pd.EnsureGroupExists("android-everybody", androidEverybodyID)
+	pd.EnsureGroupExists("chronos-access", chronosAccessID)
 
 	groups := []struct {
 		name     string
 		required bool
 	}{
 		{"android-everybody", true},
+		{"chronos-access", true},
 		{"audio", false},
 		{"cdrom", false},
 		{"dialout", false},
