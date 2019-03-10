@@ -14,9 +14,12 @@ import (
 	"log/syslog"
 	"net"
 	"os"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"syscall"
 	"time"
 
 	pb "chromiumos/vm_tools/tremplin_proto"
@@ -296,8 +299,42 @@ func main() {
 		log.Fatal("Failed to inform host that tremplin is ready: ", err)
 	}
 
-	log.Print("tremplin ready")
-	if err := server.grpcServer.Serve(lis); err != nil {
-		log.Fatal("Failed to serve gRPC: ", err)
+	// Start gRPC server in a different goroutine. grpcServer.Stop() appears
+	// to be broken with vsock, so we can't block the main goroutine on this.
+	go func() {
+		log.Print("tremplin ready")
+		if err := server.grpcServer.Serve(lis); err != nil {
+			log.Fatal("Failed to serve gRPC: ", err)
+		}
+	}()
+
+	// Shut down all containers on SIGPWR.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGPWR)
+	<-sigCh
+	log.Print("tremplin shutting down")
+
+	containers, err := server.lxd.GetContainers()
+	if err != nil {
+		log.Fatal("Failed to get containers list for shutdown: ", err)
 	}
+
+	wg := &sync.WaitGroup{}
+	for _, container := range containers {
+		if container.StatusCode != api.Running {
+			continue
+		}
+		wg.Add(1)
+		// Start all poweroffs in parallel - no reason to wait.
+		go func(name string) {
+			defer wg.Done()
+			_, _, _, err := server.execProgram(name, []string{"poweroff"})
+			if err != nil {
+				log.Printf("Failed to run poweroff in container %s: %v", name, err)
+			}
+		}(container.Name)
+	}
+	// Wait for poweroff commands to be run. Note that this doesn't mean the
+	// containers are fully shut down yet.
+	wg.Wait()
 }
