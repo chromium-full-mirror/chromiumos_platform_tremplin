@@ -1147,6 +1147,11 @@ func (s *tremplinServer) deleteContainer(containerName string) error {
 		if err = op.Wait(); err != nil {
 			return err
 		}
+		// Notify cicerone that container has been shutdown.
+		_, err = s.listenerClient.ContainerShutdown(context.Background(), &pb.ContainerShutdownInfo{ContainerName: containerName})
+		if err != nil {
+			log.Printf("Could not notify ContainerShutdown of %s on host: %v", containerName, err)
+		}
 	}
 	op, err := s.lxd.DeleteContainer(containerName)
 	if err != nil {
