@@ -760,7 +760,12 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	}
 
 	for _, group := range groups {
-		pd.EnsureUserInGroup(response.Username, group.name, group.required)
+		err := pd.EnsureUserInGroup(response.Username, group.name)
+		if err != nil && group.required {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to add user to required group %q: %v", group.name, err)
+			return response, nil
+		}
 	}
 
 	if err := pd.Save(); err != nil {

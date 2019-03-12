@@ -174,9 +174,9 @@ func (pd *PasswdDatabase) EnsureGroupExists(name string, gid uint32) {
 }
 
 // EnsureUserInGroup ensures that the given user is in the provided group name.
-func (pd *PasswdDatabase) EnsureUserInGroup(user, group string, required bool) error {
+func (pd *PasswdDatabase) EnsureUserInGroup(user, group string) error {
 	groupIndex := pd.findGroup(group)
-	if groupIndex < 0 && required {
+	if groupIndex < 0 {
 		return fmt.Errorf("can't add user to group: group %q does not exist", group)
 	}
 

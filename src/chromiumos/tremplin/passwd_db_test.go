@@ -598,7 +598,7 @@ func TestPersistence(t *testing.T) {
 		t.Fatalf("Failed creating testuser: %v", err)
 	}
 
-	err = pd.EnsureUserInGroup("testuser", "mygroup", true)
+	err = pd.EnsureUserInGroup("testuser", "mygroup")
 	if err != nil {
 		t.Fatalf("Failed putting testuser in mygroup: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestGroupAddition(t *testing.T) {
 
 	groups := []string{"audio", "cdrom", "dialout", "floppy", "plugdev", "sudo", "users", "video"}
 	for _, group := range groups {
-		err = pd.EnsureUserInGroup("testuser", group, true)
+		err = pd.EnsureUserInGroup("testuser", group)
 		if err != nil {
 			t.Fatalf("Failed putting testuser in group %q: %v", group, err)
 		}
