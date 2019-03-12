@@ -5,6 +5,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -25,7 +27,9 @@ import (
 	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
 	"github.com/lxc/lxd/shared/ioprogress"
+	"github.com/lxc/lxd/shared/osarch"
 	"google.golang.org/grpc"
+	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -1186,15 +1190,72 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		}
 	}()
 
-	// Import image.
 	importFilename := filepath.Join("/mnt/shared", importPath)
+
+	// Validate architecture of image.
+	localArchName, errLocal := osarch.ArchitectureGetLocal()
+	localArchId, errId := osarch.ArchitectureId(localArchName)
+	if errLocal != nil || errId != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to read local architecture: %v, %v", errLocal, errId)
+		return
+	}
+	supportedArchs := []int{localArchId}
+	personalities, _ := osarch.ArchitecturePersonalities(localArchId)
+	supportedArchs = append(supportedArchs, personalities...)
+
 	importFile, err := os.Open(importFilename)
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to open import file %s: %v", importFilename, err)
+		req.FailureReason = fmt.Sprintf("failed to open import file to read metadata.yaml %s: %v", importFilename, err)
 		return
 	}
 	defer importFile.Close()
+
+	// Read metadata.yaml from tarball.  If it is not the first file, then skip this check.
+	zipr, err := gzip.NewReader(importFile)
+	if err == nil {
+		tarr := tar.NewReader(zipr)
+		h, err := tarr.Next()
+		metadataReadOK := false
+		if err == nil && h.Name == "metadata.yaml" {
+			buf, _ := ioutil.ReadAll(tarr)
+			metadata := api.ImageMetadata{}
+			err = yaml.Unmarshal(buf, &metadata)
+			if err == nil {
+				metadataReadOK = true
+				archId, _ := osarch.ArchitectureId(metadata.Architecture)
+				archSupported := false
+				for _, arch := range supportedArchs {
+					if arch == archId {
+						archSupported = true
+						break
+					}
+				}
+				if !archSupported {
+					req.Status = pb.ContainerImportProgress_FAILED_ARCHITECTURE
+					req.FailureReason = fmt.Sprintf("Invalid image architecture %s must match local %s", metadata.Architecture, localArchName)
+					req.ArchitectureDevice = localArchName
+					req.ArchitectureContainer = metadata.Architecture
+					log.Printf(req.FailureReason)
+					return
+				} else {
+					log.Printf("Image architecture %s matches local %s", metadata.Architecture, localArchName)
+				}
+			}
+		}
+		if !metadataReadOK {
+			log.Printf("Could not read metadata.yaml as first file in image, got file %s, error %v", h.Name, err)
+		}
+	}
+
+	// Import image.  Reset importFile to start.
+	offset, err := importFile.Seek(0, 0)
+	if offset != 0 || err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to reset import file to upload %s: %v", importFilename, err)
+		return
+	}
 	fi, err := importFile.Stat()
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
