@@ -8,7 +8,10 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 
@@ -63,13 +66,36 @@ type OsRelease struct {
 	id         string
 }
 
+// getFileResolvingSymlinks will get the contents of a container file while
+// resolving any symlinks.
+func getFileResolvingSymlinks(lxd lxd.ContainerServer, name, p string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
+	// include/linux/namei.h defines MAXSYMLINKS
+	for i := 0; i < 40; i++ {
+		r, resp, err := lxd.GetContainerFile(name, p)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read guest path %q: %v", p, err)
+		}
+		if resp.Type != "symlink" {
+			return r, resp, nil
+		}
+
+		b, err := ioutil.ReadAll(r)
+		symlink := strings.TrimSpace(string(b))
+		if path.IsAbs(symlink) {
+			p = symlink
+		} else {
+			p = path.Join(path.Dir(p), symlink)
+		}
+	}
+	return nil, nil, errors.New("too many symlinks")
+}
+
 // getGuestOSRelease returns the os-release information for the given container.
 func getGuestOSRelease(lxd lxd.ContainerServer, name string) (*OsRelease, error) {
-	r, resp, err := lxd.GetContainerFile(name, osReleasePrimaryPath)
-	if err != nil || resp.Type == "symlink" {
+	r, _, err := getFileResolvingSymlinks(lxd, name, osReleasePrimaryPath)
+	if err != nil {
 		// Assume on error that the primary os-release path doesn't exist.
-		// If there's a symlink, assume it points to the secondary path.
-		r, _, err = lxd.GetContainerFile(name, osReleaseSecondaryPath)
+		r, _, err = getFileResolvingSymlinks(lxd, name, osReleaseSecondaryPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to find os-release file: %v", err)
 		}
