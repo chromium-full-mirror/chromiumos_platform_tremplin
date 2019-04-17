@@ -143,12 +143,12 @@ func (pd *PasswdDatabase) Save() error {
 // EnsureGroupExists ensures that a group with the given name and gid exists.
 func (pd *PasswdDatabase) EnsureGroupExists(name string, gid uint32) {
 	groupExists := false
-	for _, entry := range pd.group.Entries {
+	for i, entry := range pd.group.Entries {
 		if entry.Gid == gid {
 			if entry.Name != name {
 				log.Printf("gid %d is used but is not %q; overwriting", gid, name)
 			}
-			entry.Name = name
+			pd.group.Entries[i].Name = name
 			groupExists = true
 		}
 	}

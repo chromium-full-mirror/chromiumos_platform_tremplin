@@ -670,3 +670,31 @@ func TestGroupAddition(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupOverwrite(t *testing.T) {
+	s := NewFakeFileServer(t)
+
+	pd, err := NewPasswdDatabase(s, "")
+	if err != nil {
+		t.Fatalf("Failed to load passwd db: %v", err)
+	}
+
+	// Create a group for alice and ensure it exists.
+	pd.EnsureGroupExists("alice", 1234)
+	if groupIndex := pd.findGroup("alice"); groupIndex < 0 {
+		t.Fatal("Group alice doesn't exist")
+	}
+
+	// We expect this to overwrite the group.
+	pd.EnsureGroupExists("bob", 1234)
+
+	// The bob group should exist.
+	if groupIndex := pd.findGroup("bob"); groupIndex < 0 {
+		t.Fatal("Group bob doesn't exist")
+	}
+
+	// The alice group should have been overwritten.
+	if groupIndex := pd.findGroup("alice"); groupIndex >= 0 {
+		t.Fatal("Group alice exists, but should not exist")
+	}
+}
