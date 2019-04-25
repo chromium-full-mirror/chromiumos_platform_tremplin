@@ -5,10 +5,13 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"log/syslog"
@@ -17,7 +20,9 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +31,7 @@ import (
 	"github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
 	"github.com/mdlayher/vsock"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -37,10 +43,16 @@ const (
 	defaultListenPort      = 8890
 	defaultHostPort        = "7778"
 	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
-	devDriPath             = "/dev/dri"
-	devSndPath             = "/dev/snd"
-	milestonePath          = "/run/cros_milestone" // path to the file containing the Chrome OS milestone
+	milestonePath          = "/run/cros_milestone"    // path to the file containing the Chrome OS milestone
+	ueventBufferSize       = 4096                     // largest allowed uevent message size
 )
+
+// Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
+var validContainerDevices = []*regexp.Regexp{
+	regexp.MustCompile("^dri/.*$"),
+	regexp.MustCompile("^snd/.*$"),
+	regexp.MustCompile("^tty(ACM|USB)\\d+$"),
+}
 
 func initStoragePool(c lxd.ContainerServer) error {
 	if _, _, err := c.GetStoragePool(defaultStoragePoolName); err == nil {
@@ -84,6 +96,188 @@ func initNetwork(c lxd.ContainerServer, subnet string) error {
 	networkPut := network.Writable()
 	networkPut.Config = defaultNetwork.Config
 	return c.UpdateNetwork(defaultNetworkName, networkPut, etag)
+}
+
+// Apply an update from a uevent (device addition or removal) to the LXD devices map.
+func addDevice(devName string, devices map[string]map[string]string) error {
+	path := "/dev/" + devName
+	log.Print("Adding device: ", path)
+
+	// Add device by major/minor number to avoid errors on removal.
+	// For example, if two "remove" events occur back to back,
+	// the first one will try to submit a new profile with the second
+	// removed device still in the devices map, which will fail if the
+	// devices are added by name on the host, since the host /dev node
+	// will already be gone.
+	stat := syscall.Stat_t{}
+	err := syscall.Stat(path, &stat)
+	if err != nil {
+		log.Printf("Device %v stat failed: %v", path, err)
+		return err
+	}
+	major := unix.Major(stat.Rdev)
+	minor := unix.Minor(stat.Rdev)
+
+	devices[path] = map[string]string{
+		"path":  path,
+		"major": fmt.Sprintf("%v", major),
+		"minor": fmt.Sprintf("%v", minor),
+		"mode":  "0666",
+		"type":  "unix-char",
+	}
+	return nil
+}
+
+func removeDevice(devName string, devices map[string]map[string]string) error {
+	path := "/dev/" + devName
+	log.Print("Removing device: ", path)
+	delete(devices, path)
+
+	return nil
+}
+
+func validContainerDevice(path string) bool {
+	for _, re := range validContainerDevices {
+		if re.MatchString(path) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func initDevices(devices map[string]map[string]string) {
+	log.Print("Scanning for initial set of devices")
+
+	filepath.Walk("/dev", func(path string, f os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if f.Mode()&os.ModeCharDevice != os.ModeCharDevice {
+			return nil
+		}
+		devName := strings.TrimPrefix(path, "/dev/")
+		if validContainerDevice(devName) {
+			addDevice(devName, devices)
+		}
+		return nil
+	})
+
+	log.Print("Device scan complete")
+}
+
+func createUeventSocket() (int, error) {
+	sock, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_KOBJECT_UEVENT)
+	if err != nil {
+		log.Print("Could not create uevent netlink socket: ", err)
+		return -1, err
+	}
+
+	sockaddr := syscall.SockaddrNetlink{
+		Family: syscall.AF_NETLINK,
+		Pid:    uint32(os.Getpid()),
+		Groups: 0xFFFFFFFF,
+	}
+
+	err = syscall.Bind(sock, &sockaddr)
+	if err != nil {
+		syscall.Close(sock)
+		log.Print("Could not bind uevent netlink socket: ", err)
+		return -1, err
+	}
+
+	return sock, nil
+}
+
+func readUevent(ueventBytes []byte) (map[string]string, error) {
+	bufioReader := bufio.NewReader(bytes.NewReader(ueventBytes))
+	uevent := make(map[string]string)
+
+	// Skip the header.
+	_, err := bufioReader.ReadString(0)
+	if err != nil {
+		return nil, err
+	}
+
+	// Each message consists of KEY=VALUE records delimited by NUL.
+	for {
+		record, err := bufioReader.ReadString(0)
+		if err != nil && err != io.EOF {
+			return nil, err
+		}
+
+		if len(record) >= 1 {
+			// Trim trailing NUL (ReadString includes the delimiter).
+			record = record[:len(record)-1]
+
+			keyval := strings.SplitN(record, "=", 2)
+			if len(keyval) != 2 {
+				continue
+			}
+
+			uevent[keyval[0]] = keyval[1]
+		}
+
+		if err == io.EOF {
+			return uevent, nil
+		}
+	}
+}
+
+func ueventListen(c lxd.ContainerServer, ueventSocket int) error {
+	log.Print("Listening for device updates via uevent")
+
+	for {
+		ueventBytes := make([]byte, ueventBufferSize)
+		recvLen, _, err := syscall.Recvfrom(ueventSocket, ueventBytes, 0)
+		if err != nil {
+			log.Fatal("Failed to read uevent: ", err)
+		}
+
+		uevent, err := readUevent(ueventBytes[:recvLen])
+		if err != nil {
+			log.Print("Parsing uevent failed: ", err)
+			continue
+		}
+
+		action, ok := uevent["ACTION"]
+		if !ok {
+			continue
+		}
+
+		devName, ok := uevent["DEVNAME"]
+		if !ok {
+			continue
+		}
+
+		if action != "add" && action != "remove" {
+			continue
+		}
+
+		if !validContainerDevice(devName) {
+			log.Print("Skipping device (not on whitelist): ", devName)
+			continue
+		}
+
+		profile, etag, err := c.GetProfile(defaultProfileName)
+		if err != nil {
+			log.Print("GetProfile failed: ", err)
+			continue
+		}
+
+		profilePut := profile.Writable()
+
+		if action == "add" {
+			addDevice(devName, profilePut.Devices)
+		} else if action == "remove" {
+			removeDevice(devName, profilePut.Devices)
+		}
+
+		err = c.UpdateProfile(defaultProfileName, profilePut, etag)
+		if err != nil {
+			log.Print("UpdateProfile failed: ", err)
+		}
+	}
 }
 
 func initProfile(c lxd.ContainerServer) error {
@@ -156,25 +350,7 @@ func initProfile(c lxd.ContainerServer) error {
 		return err
 	}
 
-	for _, devPath := range []string{devDriPath, devSndPath} {
-		filepath.Walk(devPath, func(path string, f os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if path != devPath && f.IsDir() {
-				return filepath.SkipDir
-			}
-			if f.Mode()&os.ModeCharDevice != os.ModeCharDevice {
-				return nil
-			}
-			defaultProfile.Devices[f.Name()] = map[string]string{
-				"source": path,
-				"mode":   "0666",
-				"type":   "unix-char",
-			}
-			return nil
-		})
-	}
+	initDevices(defaultProfile.Devices)
 
 	profile, etag, err := c.GetProfile(defaultProfileName)
 	// Assume on error that the profile doesn't exist.
@@ -255,6 +431,12 @@ func main() {
 		log.SetOutput(logger)
 	}
 
+	ueventSocket, err := createUeventSocket()
+	if err != nil {
+		log.Fatal("Failed to open uevent netlink connection: ", err)
+	}
+	defer syscall.Close(ueventSocket)
+
 	lxdSubnet := flag.String("lxd_subnet", "", "subnet for LXD in CIDR notation")
 	flag.Parse()
 
@@ -299,6 +481,9 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to inform host that tremplin is ready: ", err)
 	}
+
+	// Listen for device updates.
+	go ueventListen(c, ueventSocket)
 
 	// Start gRPC server in a different goroutine. grpcServer.Stop() appears
 	// to be broken with vsock, so we can't block the main goroutine on this.
