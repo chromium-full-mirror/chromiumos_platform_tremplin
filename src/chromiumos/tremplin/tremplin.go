@@ -261,6 +261,60 @@ func (s *tremplinServer) startContainer(containerName string, remap bool) {
 	}
 }
 
+func (s *tremplinServer) handleCreateImageOperation(name string, op api.Operation) {
+	req := &pb.ContainerCreationProgress{
+		ContainerName: name,
+	}
+
+	switch op.StatusCode {
+	case api.Pending:
+		// The operation will only be here a short time before transitioning to
+		// Running. Don't bother informing the host since there's not anything
+		// it can do yet.
+		return
+	case api.Success:
+		fingerprint, ok := op.Metadata["fingerprint"].(string)
+		if !ok {
+			req.Status = pb.ContainerCreationProgress_FAILED
+			req.FailureReason = "no fingerprint for imported image"
+			break
+		}
+
+		containersPost := api.ContainersPost{
+			Name: name,
+			Source: api.ContainerSource{
+				Type:        "image",
+				Fingerprint: fingerprint,
+			},
+		}
+		op, err := s.lxd.CreateContainer(containersPost)
+		if err != nil {
+			req.Status = pb.ContainerCreationProgress_FAILED
+			req.FailureReason = fmt.Sprintf("failed to create container from image: %v", err)
+			break
+		}
+		_, err = op.AddHandler(func(op api.Operation) { s.handleCreateOperation(op) })
+		if err != nil {
+			log.Fatal("Failed to add create operation handler: ", err)
+		}
+		return
+	case api.Running:
+		return
+	case api.Cancelled, api.Failure:
+		req.Status = pb.ContainerCreationProgress_FAILED
+		req.FailureReason = op.Err
+	default:
+		req.Status = pb.ContainerCreationProgress_UNKNOWN
+		req.FailureReason = fmt.Sprintf("unhandled create image status: %s", op.Status)
+	}
+
+	_, err := s.listenerClient.UpdateCreateStatus(context.Background(), req)
+	if err != nil {
+		log.Printf("Could not update create status on host: %v", err)
+		return
+	}
+}
+
 func (s *tremplinServer) handleCreateOperation(op api.Operation) {
 	containers := op.Resources["containers"]
 
@@ -324,6 +378,45 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 	container, _, _ := s.lxd.GetContainer(in.ContainerName)
 	if container != nil {
 		response.Status = pb.CreateContainerResponse_EXISTS
+		return response, nil
+	}
+
+	// Import the image from tarballs.
+	if len(in.RootfsPath) > 0 && len(in.MetadataPath) > 0 {
+		rootfsReader, err := os.Open(in.RootfsPath)
+		if err != nil {
+			response.Status = pb.CreateContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to open image rootfs: %v", err)
+			return response, nil
+		}
+		metaReader, err := os.Open(in.MetadataPath)
+		if err != nil {
+			response.Status = pb.CreateContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to open image metadata: %v", err)
+			return response, nil
+		}
+
+		op, err := s.lxd.CreateImage(api.ImagesPost{
+			ImagePut: api.ImagePut{},
+		}, &lxd.ImageCreateArgs{
+			MetaFile:        metaReader,
+			MetaName:        filepath.Base(in.MetadataPath),
+			RootfsFile:      rootfsReader,
+			RootfsName:      filepath.Base(in.RootfsPath),
+			ProgressHandler: func(progress ioprogress.ProgressData) {},
+		})
+		if err != nil {
+			response.Status = pb.CreateContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to import image: %v", err)
+			return response, nil
+		}
+		_, err = op.AddHandler(func(op api.Operation) { s.handleCreateImageOperation(in.ContainerName, op) })
+		if err != nil {
+			log.Fatal("Failed to add create image operation handler: ", err)
+		}
+
+		response.Status = pb.CreateContainerResponse_CREATING
+
 		return response, nil
 	}
 
