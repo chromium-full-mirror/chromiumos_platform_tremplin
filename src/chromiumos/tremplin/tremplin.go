@@ -552,6 +552,9 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		},
 	}
 
+	// TODO(crbug.com/966513): Remove this workaround.
+	s.lxd.DeleteContainerFile(container.Name, "/etc/apt/apt.conf.d/95cros-unattended-upgrades")
+
 	osRelease, err := getGuestOSRelease(s.lxd, container.Name)
 	if err == nil {
 		if osRelease.id == "debian" {
