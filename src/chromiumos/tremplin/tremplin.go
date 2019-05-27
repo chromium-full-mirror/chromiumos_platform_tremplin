@@ -1268,7 +1268,7 @@ func (s *tremplinServer) deleteContainer(containerName string) error {
 	return nil
 }
 
-func (s *tremplinServer) importContainer(containerName, importPath string) {
+func (s *tremplinServer) importContainer(containerName, importPath string, availableDiskSpaceBytes uint64) {
 	req := &pb.ContainerImportProgress{
 		ContainerName: containerName,
 	}
@@ -1309,8 +1309,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 	defer importFile.Close()
 
 	// Read metadata.yaml from tarball.  If it is not the first file, then skip this check.
-	zipr, err := gzip.NewReader(importFile)
-	if err == nil {
+	if zipr, err := gzip.NewReader(importFile); err == nil {
 		tarr := tar.NewReader(zipr)
 		h, err := tarr.Next()
 		metadataReadOK := false
@@ -1345,17 +1344,61 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		}
 	}
 
-	// Import image.  Reset importFile to start.
-	offset, err := importFile.Seek(0, 0)
-	if offset != 0 || err != nil {
-		req.Status = pb.ContainerImportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to reset import file to upload %s: %v", importFilename, err)
-		return
-	}
 	fi, err := importFile.Stat()
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to stat import file %s: %v", importFilename, err)
+		log.Printf(req.FailureReason)
+		return
+	}
+
+	if availableDiskSpaceBytes != 0 {
+		// Read the gzip ISIZE field (uncompressed input size) which is stored as the
+		// last 4 bytes (possibly truncated) little-endian.
+		if fi.Size() < 4 {
+			req.Status = pb.ContainerImportProgress_FAILED
+			req.FailureReason = fmt.Sprintf("unexpected file size %v for %s", fi.Size(), importFilename)
+			log.Printf(req.FailureReason)
+			return
+		}
+		buf := make([]byte, 4)
+		if read, err := importFile.ReadAt(buf, fi.Size()-4); read != 4 || err != nil {
+			req.Status = pb.ContainerImportProgress_FAILED
+			req.FailureReason = fmt.Sprintf("failed to read isize from %s read %v bytes: %v", importFilename, read, err)
+			log.Printf(req.FailureReason)
+			return
+		}
+		compressedSize := uint64(fi.Size())
+		isize := uint64(binary.LittleEndian.Uint32(buf))
+
+		// ISIZE is only 32-bits and is not accurate if the uncompressed size
+		// is greater than ~4G. Assuming that the uncompressed file must be
+		// larger than compressed, we can estimate minUncompressedSize by
+		// repeatedly adding 4G to ISIZE until it is larger than compressed.
+		// The same outcome can be achieved without introducing loops by oring
+		// the top 32 bits of the compressed size with the isize, and rounding
+		// up by 1<<32 once if necessary.
+		minUncompressedSize := (compressedSize &^ 0xffffffff) | isize
+		if minUncompressedSize < compressedSize {
+			minUncompressedSize += 1 << 32
+		}
+
+		// Lxd copies the compressed file into its storage before uncompressing it.
+		minDiskUsage := minUncompressedSize + compressedSize
+		if minDiskUsage > availableDiskSpaceBytes {
+			req.Status = pb.ContainerImportProgress_FAILED_SPACE
+			req.DiskSpaceAvailableBytes = availableDiskSpaceBytes
+			req.DiskSpaceRequiredBytes = minDiskUsage
+			req.FailureReason = fmt.Sprintf("insufficient space for import, have %v bytes but needed at least %v bytes", availableDiskSpaceBytes, minDiskUsage)
+			log.Printf(req.FailureReason)
+			return
+		}
+	}
+
+	// Import image.  Reset importFile to start.
+	if offset, err := importFile.Seek(0, 0); offset != 0 || err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to reset import file to upload %s: %v", importFilename, err)
 		return
 	}
 
@@ -1494,9 +1537,9 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 
 // ImportContainer implements tremplin.ImportContainer.
 func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportContainerRequest) (*pb.ImportContainerResponse, error) {
-	log.Printf("Received ImportContainer RPC: %s %s", in.ContainerName, in.ImportPath)
+	log.Printf("Received ImportContainer RPC: %s %s %v", in.ContainerName, in.ImportPath, in.AvailableDiskSpace)
 
-	go s.importContainer(in.ContainerName, in.ImportPath)
+	go s.importContainer(in.ContainerName, in.ImportPath, in.AvailableDiskSpace)
 	response := &pb.ImportContainerResponse{
 		Status: pb.ImportContainerResponse_IMPORTING,
 	}
