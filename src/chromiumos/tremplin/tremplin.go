@@ -160,6 +160,23 @@ func (s *tremplinServer) execProgram(containerName string, args []string) (ret i
 	return int(retVal), stdoutSink.String(), stderrSink.String(), nil
 }
 
+// deleteSnapshot deletes a snapshot with snapshotName for containerName.
+func (s *tremplinServer) deleteSnapshot(containerName, snapshotName string) error {
+	op, err := s.lxd.DeleteContainerSnapshot(containerName, snapshotName)
+	if err != nil {
+		return fmt.Errorf("failed to delete existing snapshot %s: %v", snapshotName, err)
+	}
+	if err = op.Wait(); err != nil {
+		return fmt.Errorf("failed to wait for snapshot %s deletion: %v", snapshotName, err)
+	}
+	opAPI := op.Get()
+	if opAPI.StatusCode != api.Success {
+		return fmt.Errorf("snapshot %s deletion failed: %s", snapshotName, opAPI.Err)
+	}
+
+	return nil
+}
+
 // createSnapshot creates a snapshot with snapshotName for containerName.
 // Any existing snapshot with the existing snapshotName is deleted first.
 func (s *tremplinServer) createSnapshot(containerName, snapshotName string) error {
@@ -171,16 +188,8 @@ func (s *tremplinServer) createSnapshot(containerName, snapshotName string) erro
 	// Delete any existing snapshot with the same name.
 	for _, name := range names {
 		if name == snapshotName {
-			op, err := s.lxd.DeleteContainerSnapshot(containerName, snapshotName)
-			if err != nil {
-				return fmt.Errorf("failed to delete existing snapshot %s: %v", snapshotName, err)
-			}
-			if err = op.Wait(); err != nil {
-				return fmt.Errorf("failed to wait for snapshot %s deletion: %v", snapshotName, err)
-			}
-			opAPI := op.Get()
-			if opAPI.StatusCode != api.Success {
-				return fmt.Errorf("snapshot %s deletion failed: %s", snapshotName, opAPI.Err)
+			if err := s.deleteSnapshot(containerName, snapshotName); err != nil {
+				return err
 			}
 
 			break
@@ -1101,6 +1110,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		req.FailureReason = fmt.Sprintf("failed to create backup snapshot %s/%s: %v", containerName, backupSnapshot, err)
 		return
 	}
+	defer s.deleteSnapshot(containerName, backupSnapshot)
 
 	// Publish.
 	reqPublish := api.ImagesPost{
