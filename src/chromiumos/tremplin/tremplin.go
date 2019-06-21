@@ -837,20 +837,24 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 		response.Username = in.ContainerUsername
 	}
 
-	if err := pd.EnsureUserExists(response.Username, primaryUserID, true); err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to ensure primary user exists: %v", err)
-		return response, nil
+	users := []struct {
+		name         string
+		uid          uint32
+		loginEnabled bool
+	}{
+		{response.Username, primaryUserID, true},
+		{"chronos-access", chronosAccessID, false},
+		{"android-everybody", androidEverybodyID, false},
+		{"android-root", androidRootID, false},
 	}
 
-	if err := pd.EnsureUserExists("android-root", androidRootID, false); err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to create android-root: %v", err)
-		return response, nil
+	for _, user := range users {
+		if err := pd.EnsureUserExists(user.name, user.uid, user.loginEnabled); err != nil {
+			response.Status = pb.SetUpUserResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to create username=%v, uid=%v, loginEnabled=%v: %v", user.name, user.uid, user.loginEnabled, err)
+			return response, nil
+		}
 	}
-
-	pd.EnsureGroupExists("android-everybody", androidEverybodyID)
-	pd.EnsureGroupExists("chronos-access", chronosAccessID)
 
 	groups := []struct {
 		name     string
