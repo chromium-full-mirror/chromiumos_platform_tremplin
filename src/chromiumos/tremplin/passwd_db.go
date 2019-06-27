@@ -141,36 +141,39 @@ func (pd *PasswdDatabase) Save() error {
 }
 
 // EnsureGroupExists ensures that a group with the given name and gid exists.
+// An existing group with either the same name or gid but not both will be
+// deleted.
 func (pd *PasswdDatabase) EnsureGroupExists(name string, gid uint32) {
-	groupExists := false
-	for i, entry := range pd.group.Entries {
-		if entry.Gid == gid {
-			if entry.Name != name {
-				log.Printf("gid %d is used but is not %q; overwriting", gid, name)
-			}
-			pd.group.Entries[i].Name = name
-			groupExists = true
+	for i := 0; i < len(pd.group.Entries); {
+		entry := pd.group.Entries[i]
+		if entry.Gid == gid && entry.Name == name {
+			return
 		}
+		if entry.Gid == gid || entry.Name == name {
+			// Gid or name does not match. Remove conflicting group.
+			log.Printf("removing group %v(gid=%v) because it conflicts with standard group %v(gid=%v)", entry.Name, entry.Gid, name, gid)
+			pd.group.Entries = append(pd.group.Entries[:i], pd.group.Entries[i+1:]...)
+			if shadowIndex := pd.findGroupShadow(entry.Name); shadowIndex >= 0 {
+				pd.groupShadow.Entries = append(pd.groupShadow.Entries[:shadowIndex], pd.groupShadow.Entries[shadowIndex+1:]...)
+			}
+			continue
+		}
+		i++
 	}
 
-	if !groupExists {
-		pd.group.Entries = append(pd.group.Entries, shadow.GroupEntry{
-			Name:     name,
-			Password: "x",
-			Gid:      gid,
-			UserList: []string{},
-		})
-	}
+	pd.group.Entries = append(pd.group.Entries, shadow.GroupEntry{
+		Name:     name,
+		Password: "x",
+		Gid:      gid,
+		UserList: []string{},
+	})
 
-	groupShadowIndex := pd.findGroupShadow(name)
-	if groupShadowIndex < 0 {
-		pd.groupShadow.Entries = append(pd.groupShadow.Entries, shadow.GroupShadowEntry{
-			Name:     name,
-			Password: "!",
-			Admins:   []string{},
-			Members:  []string{},
-		})
-	}
+	pd.groupShadow.Entries = append(pd.groupShadow.Entries, shadow.GroupShadowEntry{
+		Name:     name,
+		Password: "!",
+		Admins:   []string{},
+		Members:  []string{},
+	})
 }
 
 // EnsureUserInGroup ensures that the given user is in the provided group name.
@@ -250,13 +253,26 @@ func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
 	return nil
 }
 
-// EnsureUserExists ensures that a user with the given uid exists. If loginEnabled
-// is true, then the user will have a login shell, and the home directory will be
-// created if necessary.
+// EnsureUserExists ensures that a user with the given uid and name exists. An
+// existing user with either the same name or uid but not both will be deleted.
+// If loginEnabled is true, then the user will have a login shell, and the home
+// directory will be created if necessary.
 func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEnabled bool) error {
-	passwdIndex := pd.findPasswd(username)
-	if passwdIndex >= 0 {
-		return nil
+	for i := 0; i < len(pd.passwd.Entries); {
+		entry := pd.passwd.Entries[i]
+		if entry.Uid == uid && entry.Name == username {
+			return nil
+		}
+		if entry.Uid == uid || entry.Name == username {
+			// Uid or name does not match. Remove conflicting user.
+			log.Printf("removing user %v(uid=%v) because it conflicts with standard user %v(uid=%v)", entry.Name, entry.Uid, username, uid)
+			pd.passwd.Entries = append(pd.passwd.Entries[:i], pd.passwd.Entries[i+1:]...)
+			if shadowIndex := pd.findShadow(entry.Name); shadowIndex >= 0 {
+				pd.shadow.Entries = append(pd.shadow.Entries[:shadowIndex], pd.shadow.Entries[shadowIndex+1:]...)
+			}
+			continue
+		}
+		i++
 	}
 
 	homedir := "/dev/null"
@@ -310,19 +326,7 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 		Reserved:   "",
 	})
 
-	pd.group.Entries = append(pd.group.Entries, shadow.GroupEntry{
-		Name:     username,
-		Password: "x",
-		Gid:      uid,
-		UserList: []string{},
-	})
-
-	pd.groupShadow.Entries = append(pd.groupShadow.Entries, shadow.GroupShadowEntry{
-		Name:     username,
-		Password: "!",
-		Admins:   []string{},
-		Members:  []string{},
-	})
+	pd.EnsureGroupExists(username, uid)
 
 	return nil
 }

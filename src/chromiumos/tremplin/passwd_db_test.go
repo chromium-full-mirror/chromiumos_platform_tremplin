@@ -549,6 +549,44 @@ func TestFakeFileServer(t *testing.T) {
 	})
 }
 
+func TestUserOverwrite(t *testing.T) {
+	s := NewFakeFileServer(t)
+
+	pd, err := NewPasswdDatabase(s, "")
+	if err != nil {
+		t.Fatalf("Failed to load passwd db: %v", err)
+	}
+
+	// Create a user for alice and bob and ensure it exists.
+	pd.EnsureUserExists("alice", 1234, false)
+	pd.EnsureUserExists("bob", 4567, false)
+	if index := pd.findPasswd("alice"); index < 0 {
+		t.Fatal("User alice doesn't exist")
+	}
+	if index := pd.findPasswd("bob"); index < 0 {
+		t.Fatal("User bob doesn't exist")
+	}
+
+	// We expect this to overwrite the user alice and the bob with a
+	// different uid.
+	pd.EnsureUserExists("bob", 1234, false)
+
+	// The bob user should exist, and with the new uid.
+	if index := pd.findPasswd("bob"); index < 0 {
+		t.Fatal("User bob doesn't exist")
+	} else if pd.passwd.Entries[index].Uid != 1234 {
+		t.Fatal("User bob's uid has not been overwritten")
+	}
+
+	// The alice user should have been overwritten.
+	if index := pd.findPasswd("alice"); index >= 0 {
+		t.Fatal("User alice exists, but should not exist")
+	}
+	if index := pd.findShadow("alice"); index >= 0 {
+		t.Fatal("User alice exists in user shadow, but should not exist")
+	}
+}
+
 func TestHomedirCreation(t *testing.T) {
 	s := NewFakeFileServer(t)
 
@@ -679,22 +717,32 @@ func TestGroupOverwrite(t *testing.T) {
 		t.Fatalf("Failed to load passwd db: %v", err)
 	}
 
-	// Create a group for alice and ensure it exists.
+	// Create a group for alice and bob and ensure it exists.
 	pd.EnsureGroupExists("alice", 1234)
+	pd.EnsureGroupExists("bob", 4567)
 	if groupIndex := pd.findGroup("alice"); groupIndex < 0 {
 		t.Fatal("Group alice doesn't exist")
 	}
-
-	// We expect this to overwrite the group.
-	pd.EnsureGroupExists("bob", 1234)
-
-	// The bob group should exist.
 	if groupIndex := pd.findGroup("bob"); groupIndex < 0 {
 		t.Fatal("Group bob doesn't exist")
+	}
+
+	// We expect this to overwrite the group alice and the bob with a
+	// different gid.
+	pd.EnsureGroupExists("bob", 1234)
+
+	// The bob group should exist, and with the new gid.
+	if groupIndex := pd.findGroup("bob"); groupIndex < 0 {
+		t.Fatal("Group bob doesn't exist")
+	} else if pd.group.Entries[groupIndex].Gid != 1234 {
+		t.Fatal("Group bob's Gid has not been overwritten")
 	}
 
 	// The alice group should have been overwritten.
 	if groupIndex := pd.findGroup("alice"); groupIndex >= 0 {
 		t.Fatal("Group alice exists, but should not exist")
+	}
+	if groupIndex := pd.findGroupShadow("alice"); groupIndex >= 0 {
+		t.Fatal("Group alice exists in group shadow, but should not exist")
 	}
 }
