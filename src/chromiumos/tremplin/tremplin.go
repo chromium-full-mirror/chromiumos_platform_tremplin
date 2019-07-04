@@ -6,6 +6,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"context"
 	"encoding/binary"
@@ -21,11 +22,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	pb "chromiumos/vm_tools/tremplin_proto"
 
 	lxd "github.com/lxc/lxd/client"
+	"github.com/lxc/lxd/shared"
 	"github.com/lxc/lxd/shared/api"
+	"github.com/lxc/lxd/shared/containerwriter"
+	"github.com/lxc/lxd/shared/idmap"
 	"github.com/lxc/lxd/shared/ioprogress"
 	"github.com/lxc/lxd/shared/osarch"
 	"google.golang.org/grpc"
@@ -42,6 +47,8 @@ const (
 	chronosAccessID    = 1001
 	androidRootID      = 655360
 	androidEverybodyID = 665357
+
+	exportWriterBufferSize = 16 * 1024 * 1024 // 16Mib.
 )
 
 // downloadRegexp extracts the download type and progress percentage from
@@ -90,31 +97,44 @@ func getDownloadPercentage(progress string) (int32, error) {
 	return int32(downloadPercent), nil
 }
 
-// idRemapRequired examines the last and next idmaps for a container and checks
-// if the container rootfs will require a remap when it next starts.
-func idRemapRequired(c *api.Container) (bool, error) {
-	lastIdmap, ok := c.ExpandedConfig["volatile.last_state.idmap"]
+// unmarshalIdmapSets unmarshals the last and next IdmapSets for a Container/ContainerSnapshot.
+func unmarshalIdmapSets(name string, config map[string]string) (*idmap.IdmapSet, *idmap.IdmapSet, error) {
+	lastIdmap, ok := config["volatile.last_state.idmap"]
 	if !ok {
-		return false, fmt.Errorf("no volatile.last_state.idmap key for container %s", c.Name)
+		return nil, nil, fmt.Errorf("no volatile.last_state.idmap key for container %s", name)
 	}
-	nextIdmap, ok := c.ExpandedConfig["volatile.idmap.next"]
+	nextIdmap, ok := config["volatile.idmap.next"]
 	if !ok {
-		return false, fmt.Errorf("no volatile.idmap.next key for container %s", c.Name)
+		return nil, nil, fmt.Errorf("no volatile.idmap.next key for container %s", name)
 	}
 
 	// The idmap configs are JSON-encoded arrays of LXD idmap entries.
-	unmarshaledLastIdmap := []interface{}{}
+	var unmarshaledLastIdmap []idmap.IdmapEntry
 	if err := json.Unmarshal([]byte(lastIdmap), &unmarshaledLastIdmap); err != nil {
-		return false, err
+		return nil, nil, err
 	}
 
-	unmarshaledNextIdmap := []interface{}{}
+	var unmarshaledNextIdmap []idmap.IdmapEntry
 	if err := json.Unmarshal([]byte(nextIdmap), &unmarshaledNextIdmap); err != nil {
+		return nil, nil, err
+	}
+
+	lastSet := &idmap.IdmapSet{Idmap: unmarshaledLastIdmap}
+	nextSet := &idmap.IdmapSet{Idmap: unmarshaledNextIdmap}
+	return lastSet, nextSet, nil
+}
+
+// idRemapRequired examines the last and next idmaps for a container and checks
+// if the container rootfs will require a remap when it next starts.
+func idRemapRequired(c *api.Container) (bool, error) {
+	lastSet, nextSet, err := unmarshalIdmapSets(c.Name, c.ExpandedConfig)
+
+	if err != nil {
 		return false, err
 	}
 
-	// A remap is required only if the last and next idmaps don't match.
-	return !reflect.DeepEqual(unmarshaledLastIdmap, unmarshaledNextIdmap), nil
+	// A remap is required only if the last and next IdmapSets don't match.
+	return !reflect.DeepEqual(lastSet, nextSet), nil
 }
 
 // tremplinServer is used to implement the gRPC tremplin.Server.
@@ -1034,16 +1054,6 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 	return response, nil
 }
 
-// seekingProgressWriter adds a nop Seek function to ioprogress.ProgressWriter
-// and allows it to be used for the export download in ImageFileRequest.
-type seekingProgressWriter struct {
-	*ioprogress.ProgressWriter
-}
-
-func (w *seekingProgressWriter) Seek(offset int64, whence int) (int64, error) {
-	return offset, nil
-}
-
 // getProgress gets stage, percent, speed from the operation metadata.
 func getProgress(op api.Operation) (stage string, percent uint32, speed uint64, ok bool) {
 	// Get 'progress' from Metadata as map[string]interface{}.
@@ -1108,127 +1118,145 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		}
 	}()
 
-	// Create a snapshot for export.  It is OK if the container is running.
+	// Create a snapshot for export. It is OK if the container is running.
 	if err := s.createSnapshot(containerName, backupSnapshot); err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to create backup snapshot %s/%s: %v", containerName, backupSnapshot, err)
 		return
 	}
-	defer s.deleteSnapshot(containerName, backupSnapshot)
-
-	// Publish.
-	reqPublish := api.ImagesPost{
-		Source: &api.ImagesPostSource{
-			Type: "snapshot",
-			Name: containerName + "/" + backupSnapshot,
-		},
-	}
-	op, err := s.lxd.CreateImage(reqPublish, nil)
-	if err != nil {
-		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to publish snapshot %s/%s: %v", containerName, backupSnapshot, err)
-		return
-	}
-	op.AddHandler(func(op api.Operation) {
-		stage, percent, speed, ok := getProgress(op)
-		if !ok {
-			return
-		}
-		req.ProgressPercent = percent
-		req.ProgressSpeed = speed
-		switch stage {
-		case "create_image_from_container_pack":
-			req.Status = pb.ContainerExportProgress_EXPORTING_PACK
-		default:
-			log.Printf("Unknown CreateImage stage: %v", stage)
-			return
-		}
-		_, err = s.listenerClient.UpdateExportStatus(context.Background(), req)
+	defer func() {
+		err := s.deleteSnapshot(containerName, backupSnapshot)
 		if err != nil {
-			log.Printf("Could not update CreateImage status on host: %v", err)
-			return
+			log.Printf("Error deleting snapshot %v for container %v", backupSnapshot, containerName)
 		}
-	})
-	var fingerprint string
-	size := int64(-1)
-	// An error for wait is only a problem if fingerprint and size are not
-	// returned.  If the image already exists, we can continue with export.
-	err = op.Wait()
-	if f, ok := op.Get().Metadata["fingerprint"]; ok {
-		fingerprint = f.(string)
-	}
-	if s, ok := op.Get().Metadata["size"]; ok {
-		size, _ = strconv.ParseInt(s.(string), 10, 64)
-	}
-	if fingerprint == "" || size == -1 {
+	}()
+
+	// Get information (IdmapSets) about the snapshot.
+	snapshot, _, err := s.lxd.GetContainerSnapshot(containerName, backupSnapshot)
+	if err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed waiting to publish snapshot %s/%s: %v", containerName, backupSnapshot, err)
+		req.FailureReason = fmt.Sprintf("failed to get container %s snapshot %s: %v", containerName, backupSnapshot, err)
 		return
 	}
 
-	// Export image.  If exportPath is a directory, then name file
-	// <fingerprint>.tar.gz, otherwise use filename given.
-	// We do not have priv to stat, so attempt to create a file with
-	// the given path, if that fails, append <fingerprint>.tar.gz.
-	exportFilename := filepath.Join("/mnt/shared", exportPath)
-	exportFile, err := os.Create(exportFilename)
+	idmapSet, _, err := unmarshalIdmapSets(snapshot.Name, snapshot.ExpandedConfig)
 	if err != nil {
-		// Assume Create failed because this is a directory.
-		// Try <exportPath>/<fingerprint>.tar.gz.
-		exportFilenameDir := filepath.Join(exportFilename, fingerprint+".tar.gz")
-		var errDir error
-		exportFile, errDir = os.Create(exportFilenameDir)
-		if errDir != nil {
-			req.Status = pb.ContainerExportProgress_FAILED
-			req.FailureReason = fmt.Sprintf("failed to create export file as %s: %v, or as %s: %v", exportFilename, err, exportFilenameDir, errDir)
-			return
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to get container %s snapshot %s id map from snapshot config: %v", containerName, backupSnapshot, err)
+		return
+	}
+
+	streamingBackupsDir := shared.VarPath("storage-pools", "default", "streamingbackups")
+	// Ensure that the rw directory exists.
+	if err = ensureDirectoryExists(streamingBackupsDir); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("Error making streamingbackups directory for container %v: %v", containerName, err)
+		return
+	}
+	streamingSnapshotDir := filepath.Join(streamingBackupsDir, containerName)
+	// Remove previous snapshot directory for this container if it exists. This shouldn't happen as the btrfs subvolume delete should clean it up.
+	if err = ensureDirectoryDoesntExist(streamingSnapshotDir); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("Error removing old streaming snapshot of container %v: %v", containerName, err)
+		return
+	}
+
+	snapshotDir := shared.VarPath("snapshots", containerName, backupSnapshot)
+	// Create a rw snapshot.
+	if _, err = execCommand("btrfs", "subvolume", "snapshot", snapshotDir, streamingSnapshotDir); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to create rw btrfs snapshot %s %s: %v", snapshotDir, streamingSnapshotDir, err)
+		return
+	}
+	defer func() {
+		_, err = execCommand("btrfs", "subvolume", "delete", streamingSnapshotDir)
+		if err != nil {
+			log.Printf("Error cleaning subvolume %v for container %v: %v", streamingSnapshotDir, containerName, err)
 		}
-	}
-	defer exportFile.Close()
+	}()
 
-	// Download the image.  We only need to supply ImageFileRequest.MetaFile
-	// and not ImageFileRequest.RootfsFile.  The exported image is a unified
-	// tarball with metadata and rootfs combined unless the LXD HTTP request
-	// to get the image has "Content-Type: multipart/form-data".
-	// https://github.com/lxc/lxd/blob/6802d7f73cf44fda6284fd8e657038e37d84e762/client/lxd_images.go#L197
-	// Use a ProgressWriter as a wrapper for exportFile.
-	log.Printf("Downloading image %s to %s, size=%d", fingerprint, exportFile.Name(), size)
-	reqExport := lxd.ImageFileRequest{
-		MetaFile: &seekingProgressWriter{&ioprogress.ProgressWriter{
-			WriteCloser: exportFile,
-			Tracker: &ioprogress.ProgressTracker{
-				Length: size,
-				Handler: func(percent, speed int64) {
-					req.ProgressPercent = uint32(percent)
-					req.ProgressSpeed = uint64(speed)
-					req.Status = pb.ContainerExportProgress_EXPORTING_DOWNLOAD
-					_, err = s.listenerClient.UpdateExportStatus(context.Background(), req)
-					if err != nil {
-						log.Printf("Could not update GetImageFile status on host: %v", err)
-						return
-					}
-				},
-			},
-		}},
+	rootfsDir := filepath.Join(streamingSnapshotDir, "rootfs", "")
+	backedUpDirs := []string{
+		filepath.Join(streamingSnapshotDir, "metadata.yaml"),
+		rootfsDir,
+		filepath.Join(streamingSnapshotDir, "templates", ""),
 	}
-	_, err = s.lxd.GetImageFile(fingerprint, reqExport)
-	if err != nil {
-		os.Remove(exportFilename)
+
+	// Unshift snapshots rootfs.
+	if err = idmapSet.UnshiftRootfs(rootfsDir, nil); err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to get image file %s: %v", fingerprint, err)
+		req.FailureReason = fmt.Sprintf("failed to unshift container %s snapshot %s: %v", containerName, backupSnapshot, err)
 		return
 	}
 
-	// Delete image.
-	op, err = s.lxd.DeleteImage(fingerprint)
+	// Get snapshot size information for progress updating.
+	snapshotNumberFiles, snapshotNumberBytes, err := calculateDiskSpaceInfo(backedUpDirs)
 	if err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("error deleting image %s: %v", fingerprint, err)
+		req.FailureReason = fmt.Sprintf("failed to calculate size for container %s snapshot %s: %v", containerName, backupSnapshot, err)
 		return
 	}
-	if err = op.Wait(); err != nil {
+	req.TotalInputFiles = snapshotNumberFiles
+	req.TotalInputBytes = snapshotNumberBytes
+
+	exportFilePath := filepath.Join("/mnt/shared", exportPath)
+	exportFile, err := os.Create(exportFilePath)
+	if err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("error waiting to delete image %s: %v", fingerprint, err)
+		req.FailureReason = fmt.Sprintf("failed to create export file as %s: %v", exportFilePath, err)
+		return
+	}
+
+	bufferedExportFile := bufio.NewWriterSize(exportFile, exportWriterBufferSize)
+	gzWriter := gzip.NewWriter(bufferedExportFile)
+	ctw := containerwriter.NewContainerTarWriter(gzWriter, idmapSet)
+
+	lastUpdate := time.Time{}
+	fileWriter := func(path string, fi os.FileInfo, err error) error {
+		if err == nil {
+			err = ctw.WriteFile(len(streamingSnapshotDir)+1, path, fi)
+			if err != nil {
+				return fmt.Errorf("failed to write file %s for container %s to output %s: %v", path, containerName, exportFilePath, err)
+			}
+			req.InputFilesStreamed += 1
+			if fiSize := fi.Size(); fiSize > 0 {
+				req.InputBytesStreamed += uint64(fiSize)
+			}
+
+			if time.Since(lastUpdate).Seconds() >= 1 {
+				req.Status = pb.ContainerExportProgress_EXPORTING_STREAMING
+
+				_, err = s.listenerClient.UpdateExportStatus(context.Background(), req)
+				if err != nil {
+					return fmt.Errorf("failed to update export status while writing container %s: %v", containerName, err)
+				}
+				lastUpdate = time.Now()
+			}
+		}
+		return nil
+	}
+
+	if err := visitFiles(backedUpDirs, fileWriter); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to write container %s: %v", containerName, err)
+		return
+	}
+
+	if err = ctw.Close(); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error closing tar writer for container %v: %v", containerName, err)
+		return
+	}
+
+	if err = gzWriter.Close(); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("error closing gz writer for container %v: %v", containerName, err)
+		return
+	}
+
+	if err = bufferedExportFile.Flush(); err != nil {
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to flush container writer %s to tar: %v", containerName, err)
 		return
 	}
 
@@ -1322,7 +1350,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 	}
 	defer importFile.Close()
 
-	// Read metadata.yaml from tarball.  If it is not the first file, then skip this check.
+	// Read metadata.yaml from tarball. If it is not the first file, then skip this check.
 	if zipr, err := gzip.NewReader(importFile); err == nil {
 		tarr := tar.NewReader(zipr)
 		h, err := tarr.Next()
@@ -1409,7 +1437,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 		}
 	}
 
-	// Import image.  Reset importFile to start.
+	// Import image. Reset importFile to start.
 	if offset, err := importFile.Seek(0, 0); offset != 0 || err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to reset import file to upload %s: %v", importFilename, err)
@@ -1444,7 +1472,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 	}
 	var fingerprint string
 	// An error for wait is only a problem if fingerprint and size are not
-	// returned.  If the image already exists, we can continue with import.
+	// returned. If the image already exists, we can continue with import.
 	err = op.Wait()
 	if f, ok := op.Get().Metadata["fingerprint"]; ok {
 		fingerprint = f.(string)
