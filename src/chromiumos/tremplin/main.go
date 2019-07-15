@@ -467,6 +467,7 @@ func main() {
 		grpcServer:     grpc.NewServer(),
 		listenerClient: pb.NewTremplinListenerClient(conn),
 		milestone:      milestone,
+		transactionMap: *NewTransactionMap(),
 	}
 
 	pb.RegisterTremplinServer(server.grpcServer, &server)
