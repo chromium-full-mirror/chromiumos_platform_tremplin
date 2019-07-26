@@ -1105,12 +1105,21 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	req := &pb.ContainerExportProgress{
 		ContainerName: containerName,
 	}
+	var exportFile *os.File
 
 	// The host must be informed of the final outcome, so ensure it's updated
 	// on every exit path.
 	defer func() {
-		if req == nil {
-			return
+		// If the export isn't succesful or has been cancelled, then
+		// the exported file is either invalid or unneeded respectively,
+		// so it should be deleted.
+		// The file cannot be deleted from within tremplin, as it has
+		// been shared in, so the client should delete it.
+		// Defensively it is truncated here to reduce disk usage ASAP.
+		if exportFile != nil && (req.Status == pb.ContainerExportProgress_FAILED || req.Status == pb.ContainerExportProgress_CANCELLED) {
+			if err := exportFile.Truncate(0); err != nil {
+				log.Printf("Failed to truncate %s: %v", exportFile.Name(), err)
+			}
 		}
 		_, err := s.listenerClient.UpdateExportStatus(context.Background(), req)
 		if err != nil {
@@ -1201,7 +1210,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	req.TotalInputBytes = snapshotNumberBytes
 
 	exportFilePath := filepath.Join("/mnt/shared", exportPath)
-	exportFile, err := os.Create(exportFilePath)
+	exportFile, err = os.Create(exportFilePath)
 	if err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to create export file as %s: %v", exportFilePath, err)
