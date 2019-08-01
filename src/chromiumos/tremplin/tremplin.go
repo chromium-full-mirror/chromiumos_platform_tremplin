@@ -1110,15 +1110,23 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	// The host must be informed of the final outcome, so ensure it's updated
 	// on every exit path.
 	defer func() {
-		// If the export isn't succesful or has been cancelled, then
-		// the exported file is either invalid or unneeded respectively,
-		// so it should be deleted.
-		// The file cannot be deleted from within tremplin, as it has
-		// been shared in, so the client should delete it.
-		// Defensively it is truncated here to reduce disk usage ASAP.
-		if exportFile != nil && (req.Status == pb.ContainerExportProgress_FAILED || req.Status == pb.ContainerExportProgress_CANCELLED) {
-			if err := exportFile.Truncate(0); err != nil {
-				log.Printf("Failed to truncate %s: %v", exportFile.Name(), err)
+		if exportFile != nil {
+			// If the export isn't succesful or has been cancelled,
+			// then the exported file is either invalid or unneeded
+			// respectively, so it should be deleted.
+			// The file cannot be deleted from within tremplin, as
+			// it has been shared in, so the client should delete
+			// it.
+			// Defensively it is truncated here to reduce disk
+			// usage ASAP.
+			if req.Status == pb.ContainerExportProgress_FAILED || req.Status == pb.ContainerExportProgress_CANCELLED {
+				if err := exportFile.Truncate(0); err != nil {
+					log.Printf("Failed to truncate %s: %v", exportFile.Name(), err)
+				}
+			}
+			// Close the export file.
+			if err := exportFile.Close(); err != nil {
+				log.Printf("Error closing export file %s: %v", exportFile.Name(), err)
 			}
 		}
 		_, err := s.listenerClient.UpdateExportStatus(context.Background(), req)
