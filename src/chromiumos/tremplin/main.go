@@ -81,6 +81,7 @@ func initNetwork(c lxd.ContainerServer, subnet string) error {
 		"managed": true,
 		"config": {
 			"ipv4.address": "%s",
+			"ipv4.dhcp.expiry": "infinite",
 			"ipv6.address": "none",
 			"raw.dnsmasq": "resolv-file=/run/resolv.conf\ndhcp-authoritative\nno-ping"
 		}
