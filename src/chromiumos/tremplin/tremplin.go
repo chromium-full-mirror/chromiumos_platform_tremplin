@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -1101,6 +1102,15 @@ func getProgress(op api.Operation) (stage string, percent uint32, speed uint64, 
 	return
 }
 
+type writeTracker struct {
+	bytesWritten uint64
+}
+
+func (c *writeTracker) Write(bytes []byte) (int, error) {
+	c.bytesWritten += uint64(len(bytes))
+	return len(bytes), nil
+}
+
 func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	req := &pb.ContainerExportProgress{
 		ContainerName: containerName,
@@ -1123,6 +1133,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 				if err := exportFile.Truncate(0); err != nil {
 					log.Printf("Failed to truncate %s: %v", exportFile.Name(), err)
 				}
+				req.BytesExported = 0
 			}
 			// Close the export file.
 			if err := exportFile.Close(); err != nil {
@@ -1226,7 +1237,8 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	}
 
 	bufferedExportFile := bufio.NewWriterSize(exportFile, exportWriterBufferSize)
-	gzWriter := gzip.NewWriter(bufferedExportFile)
+	tracker := &writeTracker{}
+	gzWriter := gzip.NewWriter(io.MultiWriter(bufferedExportFile, tracker))
 	ctw := containerwriter.NewContainerTarWriter(gzWriter, idmapSet)
 
 	lastUpdate := time.Time{}
@@ -1241,6 +1253,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 			if fiSize := fi.Size(); fiSize > 0 {
 				req.InputBytesStreamed += uint64(fiSize)
 			}
+			req.BytesExported = tracker.bytesWritten
 
 			if time.Since(lastUpdate).Seconds() >= 1 {
 				cancelled = s.transactionMap.StatusIs(containerName, PendingCancel)
