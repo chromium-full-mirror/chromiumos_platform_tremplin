@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 
+	pb "chromiumos/vm_tools/tremplin_proto"
+
 	"github.com/lxc/lxd/client"
 )
 
@@ -124,6 +126,16 @@ func getGuestOSRelease(lxd lxd.ContainerServer, name string) (*OsRelease, error)
 		}
 	}
 	return osRelease, nil
+}
+
+func (o *OsRelease) toProto() *pb.OsRelease {
+	return &pb.OsRelease{
+		PrettyName: o.prettyName,
+		Name:       o.name,
+		Version:    o.version,
+		VersionId:  o.versionID,
+		Id:         o.id,
+	}
 }
 
 func createAptSourceList(milestone int) string {

@@ -681,6 +681,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 
 	osRelease, err := getGuestOSRelease(s.lxd, container.Name)
 	if err == nil {
+		response.OsRelease = osRelease.toProto()
 		if osRelease.id == "debian" {
 			args := lxd.ContainerFileArgs{
 				Content:   strings.NewReader(createAptSourceList(s.milestone)),
