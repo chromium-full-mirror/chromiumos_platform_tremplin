@@ -41,6 +41,8 @@ import (
 const (
 	backupSnapshot      = "rootfs-backup"
 	importContainerName = "rootfs-import"
+	suffixRecover       = "-crostini-recover"
+	suffixRemap         = "-crostini-remap"
 	shiftSnapshot       = "rootfs-shift"
 
 	lingerPath         = "/var/lib/systemd/linger"
@@ -236,6 +238,200 @@ func (s *tremplinServer) createSnapshot(containerName, snapshotName string) erro
 	return nil
 }
 
+// renameContainer renames the specified container from oldName to newName.
+func (s *tremplinServer) renameContainer(oldName, newName string) error {
+	op, err := s.lxd.RenameContainer(oldName, api.ContainerPost{Name: newName})
+	if err != nil {
+		return fmt.Errorf("error calling rename container %s to %s: %v", oldName, newName, err)
+	}
+	if err = op.Wait(); err != nil {
+		return fmt.Errorf("error waiting to rename container %s to %s: %v", oldName, newName, err)
+	}
+	return nil
+}
+
+// stopContainer stops the specified container.
+func (s *tremplinServer) stopContainer(containerName string) error {
+	reqState := api.ContainerStatePut{
+		Action:  "stop",
+		Timeout: -1,
+		Force:   true,
+	}
+	op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
+	if err != nil {
+		return fmt.Errorf("error calling stop container %s: %v", containerName, err)
+	}
+	if err = op.Wait(); err != nil {
+		return fmt.Errorf("error waiting to stop container %s: %v", containerName, err)
+	}
+	return nil
+}
+
+// writeContainerFile writes content to fileName in containerName.
+func (s *tremplinServer) writeContainerFile(containerName, fileName, content string) error {
+	args := lxd.ContainerFileArgs{
+		Content:   strings.NewReader(content),
+		UID:       0,
+		GID:       0,
+		Mode:      0644,
+		Type:      "file",
+		WriteMode: "overwrite",
+	}
+	err := s.lxd.CreateContainerFile(containerName, fileName, args)
+	if err != nil {
+		return fmt.Errorf("error writing file %s in container %s: %v", fileName, containerName, err)
+	}
+	return nil
+}
+
+// getContainerWithRecovery resets the container if a previous operation such
+// as remap has failed.  Returns valid container, or nil if no container or recovery exists.
+func (s *tremplinServer) getContainerWithRecovery(containerName string) (*api.Container, string, error) {
+	container, etag, err := s.lxd.GetContainer(containerName)
+	if container != nil {
+		return container, etag, err
+	}
+
+	// If <container> doesn't exist, then restore it from <container>-crostini-recover if it exists.
+	recoverName := containerName + suffixRecover
+	log.Printf("Container %s not found, checking for recovery container %s", containerName, recoverName)
+	container, etag, err = s.lxd.GetContainer(recoverName)
+	if container == nil {
+		log.Printf("Recovery container %s not found, this must be first setup", recoverName)
+		return container, etag, err
+	}
+	log.Printf("Recovery container found, renaming %s to %s", recoverName, containerName)
+	err = s.renameContainer(recoverName, containerName)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Return updated container.
+	log.Printf("Recovery complete for %s", containerName)
+	return s.lxd.GetContainer(containerName)
+}
+
+// remapContainer copies a container and does remapping on the copy before swapping them over.
+// This process combined with using getContainerWithRecovery when first accessing the container
+// allows recovery if the remap process is stopped at any point.
+func (s *tremplinServer) remapContainer(container *api.Container) (*api.Container, string, error) {
+	recoverName := container.Name + suffixRecover
+	remapName := container.Name + suffixRemap
+
+	log.Printf("Remap: start id remap for %s", container.Name)
+	// Delete old snapshot which was previously created before remap.
+	// TODO(crbug.com/995649): Deleting 'rootfs-shift' can be removed after M80.
+	// It was previously being created for id remap, but never deleted.
+	// Ignore any errors deleting this snapshot.
+	log.Printf("Remap: delete old %s/%s snapshot if it exists", container.Name, shiftSnapshot)
+	snapshot, _, _ := s.lxd.GetContainerSnapshot(container.Name, shiftSnapshot)
+	if snapshot != nil {
+		log.Printf("Remap: snapshot %s/%s exists, deleting", container.Name, shiftSnapshot)
+		op, err := s.lxd.DeleteContainerSnapshot(container.Name, shiftSnapshot)
+		if err == nil {
+			op.Wait()
+			log.Printf("Remap: snapshot delete result: %v", op.Get())
+		}
+	} else {
+		log.Printf("Remap: snapshot %s/%s does not exist", container.Name, shiftSnapshot)
+	}
+
+	// Delete <container>-crostini-remap if it exists.
+	log.Printf("Remap: delete old remap container %s if it exists", remapName)
+	remapConatiner, _, _ := s.lxd.GetContainer(remapName)
+	if remapConatiner != nil {
+		log.Printf("Remap: Previous remap container %s exists, deleting", remapName)
+		err := s.deleteContainer(remapName)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	// Delete <container>-crostini-recover if it exists.
+	log.Printf("Remap: delete old recovery container %s if it exists", recoverName)
+	recoverConatiner, _, _ := s.lxd.GetContainer(recoverName)
+	if recoverConatiner != nil {
+		log.Printf("Remap: Previous recovery container %s exists, deleting", recoverName)
+		err := s.deleteContainer(recoverName)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	// Copy <container> to <container>-crostini-remap.
+	log.Printf("Remap: copy %s to %s", container.Name, remapName)
+	copyArgs := lxd.ContainerCopyArgs{
+		Name:          remapName,
+		ContainerOnly: true,
+	}
+	rop, err := s.lxd.CopyContainer(s.lxd, *container, &copyArgs)
+	if err != nil {
+		return nil, "", fmt.Errorf("error calling copy container for remap %s: %v", remapName, err)
+	}
+	if err = rop.Wait(); err != nil {
+		return nil, "", fmt.Errorf("error waiting for copy container for remap %s: %v", remapName, err)
+	}
+
+	// Start <container>-crostini-remap to do the remapping.
+	log.Printf("Remap: start %s to do the remapping", remapName)
+	reqState := api.ContainerStatePut{
+		Action:  "start",
+		Timeout: -1,
+	}
+	op, err := s.lxd.UpdateContainerState(remapName, reqState, "")
+	if err != nil {
+		return nil, "", fmt.Errorf("error calling start container for remap %s: %v", remapName, err)
+	}
+	if err = op.Wait(); err != nil {
+		return nil, "", fmt.Errorf("error waiting for start container for remap %s: %v", remapName, err)
+	}
+	opAPI := op.Get()
+	if opAPI.StatusCode != api.Success {
+		return nil, "", fmt.Errorf("error waiting starting container for remap %s: %v", remapName, opAPI.StatusCode)
+	}
+
+	// Stop <container>-crostini-remap.
+	log.Printf("Remap: stop %s", remapName)
+	err = s.stopContainer(remapName)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Update <container>-crostini-remap /etc/hostname to be <container>.
+	log.Printf("Remap: update %s /etc/hostname to %s", remapName, container.Name)
+	err = s.writeContainerFile(remapName, "/etc/hostname", container.Name)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Rename <container> to <container>-crostini-recover.
+	log.Printf("Remap: rename %s to %s", container.Name, recoverName)
+	err = s.renameContainer(container.Name, recoverName)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Rename <container>-crostini-remap to <container>.
+	log.Printf("Remap: rename %s to %s", remapName, container.Name)
+	err = s.renameContainer(remapName, container.Name)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Delete <container>-crostini-recover.
+	log.Printf("Remap: delete %s", recoverName)
+	err = s.deleteContainer(recoverName)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Return updated container.
+	log.Printf("Remap: complete for %s", container.Name)
+	return s.lxd.GetContainer(container.Name)
+}
+
+// startContainer performs pre-processing of the container and starts it.
+// This function is designed to be run async to allow StartContainer to return quickly.
 func (s *tremplinServer) startContainer(container *api.Container, etag string, in *pb.StartContainerRequest, remap bool) {
 	req := &pb.ContainerStartProgress{
 		ContainerName: container.Name,
@@ -326,19 +522,12 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		return
 	}
 
-	// We've updated the container, so refresh the local copy.
-	container, etag, err = s.lxd.GetContainer(in.ContainerName)
-	if err != nil {
-		req.Status = pb.ContainerStartProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to get updated container: %v", err)
-		return
-	}
-
 	if remap {
-		log.Printf("Snapshotting container %s to prepare for id remap", container.Name)
-		if err := s.createSnapshot(container.Name, shiftSnapshot); err != nil {
+		container, etag, err = s.remapContainer(container)
+		if err != nil {
+			log.Printf("Remap: error: %v", err)
 			req.Status = pb.ContainerStartProgress_FAILED
-			req.FailureReason = err.Error()
+			req.FailureReason = fmt.Sprintf("failed to remap: %v", err)
 			return
 		}
 	}
@@ -486,7 +675,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 
 	response := &pb.CreateContainerResponse{}
 
-	container, _, _ := s.lxd.GetContainer(in.ContainerName)
+	container, _, _ := s.getContainerWithRecovery(in.ContainerName)
 	if container != nil {
 		response.Status = pb.CreateContainerResponse_EXISTS
 		return response, nil
@@ -713,7 +902,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 
 	response := &pb.StartContainerResponse{}
 
-	container, etag, err := s.lxd.GetContainer(in.ContainerName)
+	container, etag, err := s.getContainerWithRecovery(in.ContainerName)
 	if err != nil {
 		response.Status = pb.StartContainerResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
@@ -729,15 +918,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 	if err == nil {
 		response.OsRelease = osRelease.toProto()
 		if osRelease.id == "debian" {
-			args := lxd.ContainerFileArgs{
-				Content:   strings.NewReader(createAptSourceList(s.milestone)),
-				UID:       0,
-				GID:       0,
-				Mode:      0644,
-				Type:      "file",
-				WriteMode: "overwrite",
-			}
-			err = s.lxd.CreateContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", args)
+			err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone))
 			if err != nil {
 				log.Print("Failed to update guest cros.list:", err)
 			}
@@ -1317,13 +1498,8 @@ func (s *tremplinServer) deleteContainer(containerName string) error {
 	}
 	if c.StatusCode != 0 && c.StatusCode != api.Stopped {
 		log.Printf("Force stopping container %s before deleting", containerName)
-		reqState := api.ContainerStatePut{
-			Action:  "stop",
-			Timeout: -1,
-			Force:   true,
-		}
-		op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
-		if err = op.Wait(); err != nil {
+		err := s.stopContainer(containerName)
+		if err != nil {
 			return err
 		}
 		// Notify cicerone that container has been shutdown.
@@ -1334,10 +1510,10 @@ func (s *tremplinServer) deleteContainer(containerName string) error {
 	}
 	op, err := s.lxd.DeleteContainer(containerName)
 	if err != nil {
-		return err
+		return fmt.Errorf("error calling delete container %s: %v", containerName, err)
 	}
 	if err = op.Wait(); err != nil {
-		return err
+		return fmt.Errorf("error waiting for delete container %s: %v", containerName, err)
 	}
 	return nil
 }
@@ -1605,15 +1781,10 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 	}
 
 	// Rename 'rootfs-import' to <containerName>.
-	op, err = s.lxd.RenameContainer(importContainerName, api.ContainerPost{Name: containerName})
+	err = s.renameContainer(importContainerName, containerName)
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("error renaming container %s to %s: %v", importContainerName, containerName, err)
-		return
-	}
-	if err = op.Wait(); err != nil {
-		req.Status = pb.ContainerImportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("error waiting to rename container %s to %s: %v", importContainerName, containerName, err)
+		req.FailureReason = err.Error()
 		return
 	}
 
