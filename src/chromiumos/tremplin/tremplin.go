@@ -236,9 +236,9 @@ func (s *tremplinServer) createSnapshot(containerName, snapshotName string) erro
 	return nil
 }
 
-func (s *tremplinServer) startContainer(containerName string, remap bool) {
+func (s *tremplinServer) startContainer(container *api.Container, etag string, in *pb.StartContainerRequest, remap bool) {
 	req := &pb.ContainerStartProgress{
-		ContainerName: containerName,
+		ContainerName: container.Name,
 	}
 
 	// The host must be informed of the final outcome, so ensure it's updated
@@ -254,9 +254,89 @@ func (s *tremplinServer) startContainer(containerName string, remap bool) {
 		}
 	}()
 
+	// Prepare SSH keys, token, and apt config to bind-mount in.
+	// Clear out all existing devices for the container.
+	containerPut := container.Writable()
+	containerPut.Devices = map[string]map[string]string{}
+	err := os.MkdirAll(fmt.Sprintf("/run/sshd/%s", container.Name), 0644)
+	if err != nil {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to create ssh key dir: %v", err)
+		return
+	}
+	bindMounts := []bindMount{
+		{
+			name:    "container_token",
+			content: in.Token,
+			source:  fmt.Sprintf("/run/tokens/%s_token", container.Name),
+			dest:    "/dev/.container_token",
+		},
+		{
+			name:    "ssh_authorized_keys",
+			content: in.HostPublicKey,
+			source:  fmt.Sprintf("/run/sshd/%s/authorized_keys", container.Name),
+			dest:    "/dev/.ssh/ssh_authorized_keys",
+		},
+		{
+			name:    "ssh_host_key",
+			content: in.ContainerPrivateKey,
+			source:  fmt.Sprintf("/run/sshd/%s/ssh_host_key", container.Name),
+			dest:    "/dev/.ssh/ssh_host_key",
+		},
+	}
+
+	// TODO(crbug.com/966513): Remove this workaround.
+	s.lxd.DeleteContainerFile(container.Name, "/etc/apt/apt.conf.d/95cros-unattended-upgrades")
+
+	for _, b := range bindMounts {
+		// Disregard bind mounts without values.
+		if b.content == "" {
+			continue
+		}
+
+		err = ioutil.WriteFile(b.source, []byte(b.content), 0644)
+		if err != nil {
+			req.Status = pb.ContainerStartProgress_FAILED
+			req.FailureReason = fmt.Sprintf("failed to write %q: %v", b.source, err)
+			return
+		}
+
+		containerPut.Devices[b.name] = map[string]string{
+			"source": b.source,
+			"path":   b.dest,
+			"type":   "disk",
+		}
+	}
+
+	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
+	if err != nil {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to set up devices: %v", err)
+		return
+	}
+	if err = op.Wait(); err != nil {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to wait for container update: %v", err)
+		return
+	}
+	opAPI := op.Get()
+	if opAPI.StatusCode != api.Success {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to update container: %v", err)
+		return
+	}
+
+	// We've updated the container, so refresh the local copy.
+	container, etag, err = s.lxd.GetContainer(in.ContainerName)
+	if err != nil {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to get updated container: %v", err)
+		return
+	}
+
 	if remap {
-		log.Printf("Snapshotting container %s to prepare for id remap", containerName)
-		if err := s.createSnapshot(containerName, shiftSnapshot); err != nil {
+		log.Printf("Snapshotting container %s to prepare for id remap", container.Name)
+		if err := s.createSnapshot(container.Name, shiftSnapshot); err != nil {
 			req.Status = pb.ContainerStartProgress_FAILED
 			req.FailureReason = err.Error()
 			return
@@ -267,7 +347,7 @@ func (s *tremplinServer) startContainer(containerName string, remap bool) {
 		Action:  "start",
 		Timeout: -1,
 	}
-	op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
+	op, err = s.lxd.UpdateContainerState(container.Name, reqState, "")
 	if err != nil {
 		req.Status = pb.ContainerStartProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to start container: %v", err)
@@ -279,7 +359,7 @@ func (s *tremplinServer) startContainer(containerName string, remap bool) {
 		req.FailureReason = fmt.Sprintf("failed to wait for container startup: %v", err)
 		return
 	}
-	opAPI := op.Get()
+	opAPI = op.Get()
 
 	switch opAPI.StatusCode {
 	case api.Success:
@@ -645,40 +725,6 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		return response, nil
 	}
 
-	// Prepare SSH keys, token, and apt config to bind-mount in.
-	// Clear out all existing devices for the container.
-	containerPut := container.Writable()
-	containerPut.Devices = map[string]map[string]string{}
-	err = os.MkdirAll(fmt.Sprintf("/run/sshd/%s", container.Name), 0644)
-	if err != nil {
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to create ssh key dir: %v", err)
-		return response, nil
-	}
-	bindMounts := []bindMount{
-		{
-			name:    "container_token",
-			content: in.Token,
-			source:  fmt.Sprintf("/run/tokens/%s_token", container.Name),
-			dest:    "/dev/.container_token",
-		},
-		{
-			name:    "ssh_authorized_keys",
-			content: in.HostPublicKey,
-			source:  fmt.Sprintf("/run/sshd/%s/authorized_keys", container.Name),
-			dest:    "/dev/.ssh/ssh_authorized_keys",
-		},
-		{
-			name:    "ssh_host_key",
-			content: in.ContainerPrivateKey,
-			source:  fmt.Sprintf("/run/sshd/%s/ssh_host_key", container.Name),
-			dest:    "/dev/.ssh/ssh_host_key",
-		},
-	}
-
-	// TODO(crbug.com/966513): Remove this workaround.
-	s.lxd.DeleteContainerFile(container.Name, "/etc/apt/apt.conf.d/95cros-unattended-upgrades")
-
 	osRelease, err := getGuestOSRelease(s.lxd, container.Name)
 	if err == nil {
 		response.OsRelease = osRelease.toProto()
@@ -700,52 +746,6 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		log.Printf("Could not identify container %q guest distro: %v", container.Name, err)
 	}
 
-	for _, b := range bindMounts {
-		// Disregard bind mounts without values.
-		if b.content == "" {
-			continue
-		}
-
-		err = ioutil.WriteFile(b.source, []byte(b.content), 0644)
-		if err != nil {
-			response.Status = pb.StartContainerResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to write %q: %v", b.source, err)
-			return response, nil
-		}
-
-		containerPut.Devices[b.name] = map[string]string{
-			"source": b.source,
-			"path":   b.dest,
-			"type":   "disk",
-		}
-	}
-
-	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
-	if err != nil {
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to set up devices: %v", err)
-		return response, nil
-	}
-	if err = op.Wait(); err != nil {
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to wait for container update: %v", err)
-		return response, nil
-	}
-	opAPI := op.Get()
-	if opAPI.StatusCode != api.Success {
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to update container: %v", err)
-		return response, nil
-	}
-
-	// We've updated the container, so refresh the local copy.
-	container, etag, err = s.lxd.GetContainer(in.ContainerName)
-	if err != nil {
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to get updated container: %v", err)
-		return response, nil
-	}
-
 	remapRequired, err := idRemapRequired(container)
 	if err != nil {
 		response.Status = pb.StartContainerResponse_FAILED
@@ -753,54 +753,13 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		return response, nil
 	}
 
-	if in.Async {
-		go s.startContainer(container.Name, remapRequired)
+	go s.startContainer(container, etag, in, remapRequired)
 
-		if remapRequired {
-			response.Status = pb.StartContainerResponse_REMAPPING
+	if remapRequired {
+		response.Status = pb.StartContainerResponse_REMAPPING
 
-		} else {
-			response.Status = pb.StartContainerResponse_STARTING
-		}
-
-		return response, nil
-	}
-
-	// TODO(smbarber): Remove once async codepath is default.
-	reqState := api.ContainerStatePut{
-		Action:  "start",
-		Timeout: -1,
-	}
-	op, err = s.lxd.UpdateContainerState(container.Name, reqState, "")
-	if err != nil {
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to start container: %v", err)
-		return response, nil
-	}
-
-	if err = op.Wait(); err != nil {
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to wait for container startup: %v", err)
-		return response, nil
-	}
-	opAPI = op.Get()
-
-	switch opAPI.StatusCode {
-	case api.Success:
-		response.Status = pb.StartContainerResponse_STARTED
-		if s.timezoneName != "" {
-			// In case the container was off when we set the timezone, we try
-			// to set the timezone again when the container starts up.
-			ret, _, _, err := s.execProgram(container.Name, []string{"timedatectl", "set-timezone", s.timezoneName})
-			if err == nil && ret == 0 {
-				// Success! Unset the TZ variable as it takes precedence over the timedatectl setting.
-				delete(container.Config, "environment.TZ")
-				s.lxd.UpdateContainer(container.Name, container.Writable(), "")
-			}
-		}
-	case api.Cancelled, api.Failure:
-		response.Status = pb.StartContainerResponse_FAILED
-		response.FailureReason = opAPI.Err
+	} else {
+		response.Status = pb.StartContainerResponse_STARTING
 	}
 
 	return response, nil
