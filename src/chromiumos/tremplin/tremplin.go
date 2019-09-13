@@ -1822,7 +1822,7 @@ func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportConta
 	return response, nil
 }
 
-// CancelImportContainer implements tremplin.CancelImportContainer .
+// CancelImportContainer implements tremplin.CancelImportContainer.
 func (s *tremplinServer) CancelImportContainer(ctx context.Context, in *pb.CancelImportContainerRequest) (*pb.CancelImportContainerResponse, error) {
 	log.Printf("Received CancelImportContainer RPC: %v", in.InProgressContainerName)
 
@@ -1831,4 +1831,16 @@ func (s *tremplinServer) CancelImportContainer(ctx context.Context, in *pb.Cance
 	} else {
 		return &pb.CancelImportContainerResponse{Status: pb.CancelImportContainerResponse_OPERATION_NOT_FOUND}, nil
 	}
+}
+
+// UpgradeContainer implements (or will) tremplin.UpgradeContainer.
+func (s *tremplinServer) UpgradeContainer(ctx context.Context, in *pb.UpgradeContainerRequest) (*pb.UpgradeContainerResponse, error) {
+	log.Printf("Not implemented")
+	return &pb.UpgradeContainerResponse{Status: pb.UpgradeContainerResponse_UNKNOWN}, nil
+}
+
+// CancelUpgradeContainer implements (or will) tremplin.CancelUpgradeContainer.
+func (s *tremplinServer) CancelUpgradeContainer(ctx context.Context, in *pb.CancelUpgradeContainerRequest) (*pb.CancelUpgradeContainerResponse, error) {
+	log.Printf("Not implemented")
+	return &pb.CancelUpgradeContainerResponse{Status: pb.CancelUpgradeContainerResponse_UNKNOWN}, nil
 }
