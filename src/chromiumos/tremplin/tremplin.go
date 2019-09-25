@@ -1055,15 +1055,7 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 		return response, nil
 	}
 
-	container, _, err := s.lxd.GetContainer(in.ContainerName)
-	if err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
-		return response, nil
-	}
-
-	// Enable loginctl linger for the target user. If running, use loginctl to
-	// kick and start a user session.
+	// Enable loginctl linger for the target user.
 	if err := pd.lxd.CreateContainerFile(in.ContainerName, lingerPath, lxd.ContainerFileArgs{
 		UID:  0,
 		GID:  0,
@@ -1084,21 +1076,6 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 		response.Status = pb.SetUpUserResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to create linger file: %v", err)
 		return response, nil
-	}
-
-	if container.StatusCode == api.Running {
-		ret, _, stderr, err := s.execProgram(in.ContainerName,
-			[]string{"loginctl", "enable-linger", response.Username})
-		if err != nil {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to run loginctl: %v", err)
-			return response, nil
-		}
-		if ret != 0 {
-			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to enable linger: %s", stderr)
-			return response, nil
-		}
 	}
 
 	response.Status = pb.SetUpUserResponse_SUCCESS
