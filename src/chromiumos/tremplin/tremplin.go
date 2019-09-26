@@ -481,9 +481,6 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		},
 	}
 
-	// TODO(crbug.com/966513): Remove this workaround.
-	s.lxd.DeleteContainerFile(container.Name, "/etc/apt/apt.conf.d/95cros-unattended-upgrades")
-
 	for _, b := range bindMounts {
 		// Disregard bind mounts without values.
 		if b.content == "" {
