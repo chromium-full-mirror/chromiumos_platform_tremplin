@@ -464,11 +464,13 @@ func main() {
 	defer conn.Close()
 
 	server := tremplinServer{
-		lxd:            c,
-		grpcServer:     grpc.NewServer(),
-		listenerClient: pb.NewTremplinListenerClient(conn),
-		milestone:      milestone,
-		transactionMap: *NewTransactionMap(),
+		lxd:                         c,
+		grpcServer:                  grpc.NewServer(),
+		listenerClient:              pb.NewTremplinListenerClient(conn),
+		milestone:                   milestone,
+		exportImportStatus:          *NewTransactionMap(),
+		upgradeStatus:               *NewTransactionMap(),
+		upgradeClientUpdateInterval: 5 * time.Second,
 	}
 
 	if err := startAuditListener(&server); err != nil {

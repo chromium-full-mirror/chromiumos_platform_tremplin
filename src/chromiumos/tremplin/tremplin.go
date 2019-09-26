@@ -142,32 +142,40 @@ func idRemapRequired(c *api.Container) (bool, error) {
 
 // tremplinServer is used to implement the gRPC tremplin.Server.
 type tremplinServer struct {
-	lxd            lxd.ContainerServer
-	grpcServer     *grpc.Server
-	listenerClient pb.TremplinListenerClient
-	milestone      int
-	timezoneName   string
-	transactionMap TransactionMap
+	lxd                         lxd.ContainerServer
+	grpcServer                  *grpc.Server
+	listenerClient              pb.TremplinListenerClient
+	milestone                   int
+	timezoneName                string
+	exportImportStatus          TransactionMap
+	upgradeStatus               TransactionMap
+	upgradeClientUpdateInterval time.Duration
 }
 
-// execProgram runs a program in a container to completion, capturing its
-// return value, stdout, and stderr.
-func (s *tremplinServer) execProgram(containerName string, args []string) (ret int, stdout string, stderr string, err error) {
+// execProgramAsync starts running a program in a container.
+func (s *tremplinServer) execProgramAsync(containerName string, args []string, stdout io.WriteCloser, stderr io.WriteCloser) (op lxd.Operation, err error) {
 	req := api.ContainerExecPost{
 		Command:     args,
 		WaitForWS:   true,
 		Interactive: false,
 	}
 
-	stdoutSink := &stdioSink{}
-	stderrSink := &stdioSink{}
 	execArgs := &lxd.ContainerExecArgs{
 		Stdin:  &stdioSink{},
-		Stdout: stdoutSink,
-		Stderr: stderrSink,
+		Stdout: stdout,
+		Stderr: stderr,
 	}
 
-	op, err := s.lxd.ExecContainer(containerName, req, execArgs)
+	return s.lxd.ExecContainer(containerName, req, execArgs)
+}
+
+// execProgram runs a program in a container to completion, capturing its
+// return value, stdout, and stderr.
+func (s *tremplinServer) execProgram(containerName string, args []string) (ret int, stdout string, stderr string, err error) {
+	stdoutSink := &stdioSink{}
+	stderrSink := &stdioSink{}
+
+	op, err := s.execProgramAsync(containerName, args, stdoutSink, stderrSink)
 	if err != nil {
 		return 0, "", "", err
 	}
@@ -1394,7 +1402,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 			req.BytesExported = tracker.bytesWritten
 
 			if time.Since(lastUpdate).Seconds() >= 1 {
-				cancelled = s.transactionMap.StatusIs(containerName, PendingCancel)
+				cancelled = s.exportImportStatus.StatusIs(containerName, PendingCancel)
 				if cancelled {
 					return nil
 				}
@@ -1448,7 +1456,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 func (s *tremplinServer) ExportContainer(ctx context.Context, in *pb.ExportContainerRequest) (*pb.ExportContainerResponse, error) {
 	log.Printf("Received ExportContainer RPC: %s %s", in.ContainerName, in.ExportPath)
 
-	if !s.transactionMap.StartTransaction(in.ContainerName) {
+	if !s.exportImportStatus.StartTransaction(in.ContainerName) {
 		// !started is true iff there is a collision on container names in the
 		// transaction map, this should never happen as the invariant that only a
 		// single operation for a given container can occur at the same time is
@@ -1462,7 +1470,7 @@ func (s *tremplinServer) ExportContainer(ctx context.Context, in *pb.ExportConta
 
 	go func() {
 		s.exportContainer(in.ContainerName, in.ExportPath)
-		if !s.transactionMap.Remove(in.ContainerName) {
+		if !s.exportImportStatus.Remove(in.ContainerName) {
 			// !removed is true iff no transaction exists for the container name, this
 			// should never happen, and if it does no cleanup is required.
 			log.Printf("Couldn't remove transaction as it wasn't found for container: %s", in.ContainerName)
@@ -1478,7 +1486,7 @@ func (s *tremplinServer) ExportContainer(ctx context.Context, in *pb.ExportConta
 func (s *tremplinServer) CancelExportContainer(ctx context.Context, in *pb.CancelExportContainerRequest) (*pb.CancelExportContainerResponse, error) {
 	log.Printf("Received CancelExportContainer RPC: %v", in.InProgressContainerName)
 
-	if s.transactionMap.SetStatus(in.InProgressContainerName, PendingCancel) {
+	if s.exportImportStatus.SetStatus(in.InProgressContainerName, PendingCancel) {
 		return &pb.CancelExportContainerResponse{Status: pb.CancelExportContainerResponse_CANCEL_QUEUED}, nil
 	} else {
 		return &pb.CancelExportContainerResponse{Status: pb.CancelExportContainerResponse_OPERATION_NOT_FOUND}, nil
@@ -1703,7 +1711,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 		}
 	}()
 
-	if s.transactionMap.StatusIs(containerName, PendingCancel) {
+	if s.exportImportStatus.StatusIs(containerName, PendingCancel) {
 		req.Status = pb.ContainerImportProgress_CANCELLED
 		log.Printf("ImportContainer cancelled")
 		return
@@ -1763,7 +1771,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 		return
 	}
 
-	if s.transactionMap.StatusIs(containerName, PendingCancel) {
+	if s.exportImportStatus.StatusIs(containerName, PendingCancel) {
 		req.Status = pb.ContainerImportProgress_CANCELLED
 		log.Printf("ImportContainer cancelled")
 		return
@@ -1793,7 +1801,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportContainerRequest) (*pb.ImportContainerResponse, error) {
 	log.Printf("Received ImportContainer RPC: %s %s %v", in.ContainerName, in.ImportPath, in.AvailableDiskSpace)
 
-	if !s.transactionMap.StartTransaction(in.ContainerName) {
+	if !s.exportImportStatus.StartTransaction(in.ContainerName) {
 		// !started is true iff there is a collision on container names in the
 		// transaction map, this should never happen as the invariant that only a
 		// single operation for a given container can occur at the same time is
@@ -1807,7 +1815,7 @@ func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportConta
 
 	go func() {
 		s.importContainer(in.ContainerName, in.ImportPath, in.AvailableDiskSpace)
-		if !s.transactionMap.Remove(in.ContainerName) {
+		if !s.exportImportStatus.Remove(in.ContainerName) {
 			// !removed is true iff no transaction exists for the container name, this
 			// should never happen, and if it does no cleanup is required.
 			log.Printf("Couldn't remove transaction as it wasn't found for container: %s", in.ContainerName)
@@ -1823,17 +1831,20 @@ func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportConta
 func (s *tremplinServer) CancelImportContainer(ctx context.Context, in *pb.CancelImportContainerRequest) (*pb.CancelImportContainerResponse, error) {
 	log.Printf("Received CancelImportContainer RPC: %v", in.InProgressContainerName)
 
-	if s.transactionMap.SetStatus(in.InProgressContainerName, PendingCancel) {
+	if s.exportImportStatus.SetStatus(in.InProgressContainerName, PendingCancel) {
 		return &pb.CancelImportContainerResponse{Status: pb.CancelImportContainerResponse_CANCEL_QUEUED}, nil
 	} else {
 		return &pb.CancelImportContainerResponse{Status: pb.CancelImportContainerResponse_OPERATION_NOT_FOUND}, nil
 	}
 }
 
-// UpgradeContainer implements (or will) tremplin.UpgradeContainer.
+// UpgradeContainer implements tremplin.UpgradeContainer.
 func (s *tremplinServer) UpgradeContainer(ctx context.Context, in *pb.UpgradeContainerRequest) (*pb.UpgradeContainerResponse, error) {
-	log.Printf("Not implemented")
-	return &pb.UpgradeContainerResponse{Status: pb.UpgradeContainerResponse_UNKNOWN}, nil
+	status, msg := s.startUpgradeContainer(in.ContainerName, in.SourceVersion, in.TargetVersion)
+	return &pb.UpgradeContainerResponse{
+		Status:        status,
+		FailureReason: msg,
+	}, nil
 }
 
 // CancelUpgradeContainer implements (or will) tremplin.CancelUpgradeContainer.
