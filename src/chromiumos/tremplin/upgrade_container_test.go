@@ -12,13 +12,14 @@ import (
 	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
 	"google.golang.org/grpc"
+	"io"
 	"testing"
 	"time"
 )
 
 type lxdStub struct {
 	lxd.ContainerServer
-	operation lxd.Operation
+	operation *operationStub
 	execError error
 }
 
@@ -27,19 +28,23 @@ type operationStub struct {
 	apiOperation api.Operation
 	waitTime     time.Duration
 	waitError    error
+	out          io.WriteCloser
 }
 
 type listenerStub struct {
 	pb.TremplinListenerClient
-	validator func(pb.UpgradeContainerProgress_Status)
+	validator func(pb.UpgradeContainerProgress)
 }
 
 func (s lxdStub) ExecContainer(containerName string, exec api.ContainerExecPost, args *lxd.ContainerExecArgs) (lxd.Operation, error) {
+	s.operation.out = args.Stdout
+	args.Stdout.Write([]byte("In-progress message\n"))
 	return s.operation, s.execError
 }
 
 func (s operationStub) Wait() (err error) {
 	time.Sleep(s.waitTime)
+	s.out.Write([]byte("Last in-progress message\nDone message\n"))
 	return s.waitError
 }
 
@@ -49,12 +54,12 @@ func (s operationStub) Get() api.Operation {
 
 func (s listenerStub) UpgradeContainerStatus(ctx context.Context, in *pb.UpgradeContainerProgress, opts ...grpc.CallOption) (*pb.EmptyMessage, error) {
 	if s.validator != nil {
-		s.validator(in.Status)
+		s.validator(*in)
 	}
 	return &pb.EmptyMessage{}, nil
 }
 
-func makeStubs(returnCode float64, waitTime time.Duration, validator func(pb.UpgradeContainerProgress_Status)) (*tremplinServer, *lxdStub, *operationStub) {
+func makeStubs(returnCode float64, waitTime time.Duration, validator func(pb.UpgradeContainerProgress)) (*tremplinServer, *lxdStub, *operationStub) {
 	metadata := map[string]interface{}{
 		"return": returnCode,
 	}
@@ -82,6 +87,15 @@ func makeStubs(returnCode float64, waitTime time.Duration, validator func(pb.Upg
 	return server, lxd, op
 }
 
+func contains(arr []string, needle string) bool {
+	for _, line := range arr {
+		if line == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 	// Our upgrade sleeps for a very long time in the background, we don't wait for or need it to finish so it's fine.
 	// This needs to be long enough that the second Start runs before the first finishes.
@@ -106,8 +120,8 @@ func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 // If the upgrade fails we should be able to try upgrading again.
 func TestStartUpgradeContainerCanRetryAfterFailure(t *testing.T) {
 	done := make(chan bool)
-	callback := func(status pb.UpgradeContainerProgress_Status) {
-		if status != pb.UpgradeContainerProgress_IN_PROGRESS {
+	callback := func(status pb.UpgradeContainerProgress) {
+		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
 			done <- true
 		}
 	}
@@ -161,9 +175,10 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 }
 
 func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
-	statusChannel := make(chan pb.UpgradeContainerProgress_Status)
-	callback := func(status pb.UpgradeContainerProgress_Status) {
+	statusChannel := make(chan pb.UpgradeContainerProgress)
+	callback := func(status pb.UpgradeContainerProgress) {
 		statusChannel <- status
+		fmt.Println(status.ProgressMessages)
 	}
 
 	// Our upgrade sleeps for a very long time in the background, we don't wait for or need it to finish so it's fine.
@@ -175,36 +190,44 @@ func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start, got %s", status)
 	}
-	if s := <-statusChannel; s != pb.UpgradeContainerProgress_IN_PROGRESS {
+	s := <-statusChannel
+	if s.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
 		t.Fatalf("Didn't get in-progress message, got %s", s)
+	}
+	if len(s.ProgressMessages) == 0 {
+		t.Fatal("Didn't get any progress messages")
 	}
 }
 
 func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
-	statusChannel := make(chan pb.UpgradeContainerProgress_Status)
-	callback := func(status pb.UpgradeContainerProgress_Status) {
-		if status != pb.UpgradeContainerProgress_IN_PROGRESS {
-			statusChannel <- status
+	ch := make(chan pb.UpgradeContainerProgress)
+	callback := func(status pb.UpgradeContainerProgress) {
+		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
+			ch <- status
 		}
 	}
 
-	server, _, _ := makeStubs(0.0, 0*time.Millisecond, callback)
+	server, _, _ := makeStubs(0.0, 1*time.Millisecond, callback)
 
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, git %s", status)
+		t.Fatalf("Failed to start, got %s", status)
 	}
-	if s := <-statusChannel; s != pb.UpgradeContainerProgress_SUCCEEDED {
+	s := <-ch
+	if s.Status != pb.UpgradeContainerProgress_SUCCEEDED {
 		t.Fatalf("Didn't get success message, got %s", s)
+	}
+	if !contains(s.ProgressMessages, "Done message") {
+		t.Fatalf("Didn't see expected end message, only saw: %v", s.ProgressMessages)
 	}
 }
 
 func TestUpgradeContainerSendsFailureOnUnsuccessfulEnd(t *testing.T) {
 	statusChannel := make(chan pb.UpgradeContainerProgress_Status)
-	callback := func(status pb.UpgradeContainerProgress_Status) {
-		if status != pb.UpgradeContainerProgress_IN_PROGRESS {
-			statusChannel <- status
+	callback := func(status pb.UpgradeContainerProgress) {
+		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
+			statusChannel <- status.Status
 		}
 	}
 
@@ -222,9 +245,9 @@ func TestUpgradeContainerSendsFailureOnUnsuccessfulEnd(t *testing.T) {
 
 func TestUpgradeContainerSendsFailureOnLxdError(t *testing.T) {
 	statusChannel := make(chan pb.UpgradeContainerProgress_Status)
-	callback := func(status pb.UpgradeContainerProgress_Status) {
-		if status != pb.UpgradeContainerProgress_IN_PROGRESS {
-			statusChannel <- status
+	callback := func(status pb.UpgradeContainerProgress) {
+		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
+			statusChannel <- status.Status
 		}
 	}
 

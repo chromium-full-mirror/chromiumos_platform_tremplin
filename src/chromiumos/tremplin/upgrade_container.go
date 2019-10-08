@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	lxd "github.com/lxc/lxd/client"
+	"strings"
 	"time"
 )
 
@@ -41,15 +42,15 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, sourceVersi
 func (s *tremplinServer) babysitContainerUpgrade(op lxd.Operation, ioSink *stdioSink, containerName string) {
 	ticker := time.NewTicker(s.upgradeClientUpdateInterval)
 	done := make(chan error)
-	// TODO(crbug.com/930901): Send messages and output in addition to status.
 	// TODO(crbug.com/930901): Timeout.
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
 				progress := &pb.UpgradeContainerProgress{
-					ContainerName: containerName,
-					Status:        pb.UpgradeContainerProgress_IN_PROGRESS,
+					ContainerName:    containerName,
+					Status:           pb.UpgradeContainerProgress_IN_PROGRESS,
+					ProgressMessages: strings.Split(ioSink.ReadString(), "\n"),
 				}
 				s.listenerClient.UpgradeContainerStatus(context.Background(), progress)
 			case err := <-done:
@@ -57,16 +58,17 @@ func (s *tremplinServer) babysitContainerUpgrade(op lxd.Operation, ioSink *stdio
 				s.upgradeStatus.Remove(containerName)
 				ret := op.Get().Metadata["return"].(float64)
 				if err != nil || ret != 0 {
-					// TODO(crbug.com/930901): Make sure our final message to the user includes the failure reason.
 					progress := &pb.UpgradeContainerProgress{
-						ContainerName: containerName,
-						Status:        pb.UpgradeContainerProgress_FAILED,
+						ContainerName:    containerName,
+						Status:           pb.UpgradeContainerProgress_FAILED,
+						ProgressMessages: strings.Split(ioSink.ReadString(), "\n"),
 					}
 					s.listenerClient.UpgradeContainerStatus(context.Background(), progress)
 				} else {
 					progress := &pb.UpgradeContainerProgress{
-						ContainerName: containerName,
-						Status:        pb.UpgradeContainerProgress_SUCCEEDED,
+						ContainerName:    containerName,
+						Status:           pb.UpgradeContainerProgress_SUCCEEDED,
+						ProgressMessages: strings.Split(ioSink.ReadString(), "\n"),
 					}
 					s.listenerClient.UpgradeContainerStatus(context.Background(), progress)
 				}
