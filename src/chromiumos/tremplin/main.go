@@ -424,7 +424,7 @@ func vsockHostDialer(addr string, timeout time.Duration) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert addr to int: %q", addr)
 	}
-	return vsock.Dial(vsock.ContextIDHost, uint32(port))
+	return vsock.Dial(vsock.Host, uint32(port))
 }
 
 func main() {
@@ -493,12 +493,15 @@ func main() {
 	// Listen for device updates.
 	go ueventListen(c, ueventSocket)
 
-	// Start gRPC server in a different goroutine. grpcServer.Stop() appears
-	// to be broken with vsock, so we can't block the main goroutine on this.
+	// Start gRPC server in a different goroutine.
 	go func() {
 		log.Print("tremplin ready")
 		if err := server.grpcServer.Serve(lis); err != nil {
-			log.Fatal("Failed to serve gRPC: ", err)
+			// Filter error messages with the following text. When the server is stopped
+			// normally, this error is always returned.
+			if !strings.Contains(err.Error(), "use of closed network connection") {
+				log.Fatal("Failed to serve gRPC: ", err)
+			}
 		}
 	}()
 
@@ -507,6 +510,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGPWR)
 	<-sigCh
 	log.Print("tremplin shutting down")
+	server.grpcServer.GracefulStop()
 
 	containers, err := server.lxd.GetContainers()
 	if err != nil {
