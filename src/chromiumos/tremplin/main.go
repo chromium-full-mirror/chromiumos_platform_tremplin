@@ -52,6 +52,7 @@ var validContainerDevices = []*regexp.Regexp{
 	regexp.MustCompile("^dri/.*$"),
 	regexp.MustCompile("^snd/.*$"),
 	regexp.MustCompile("^tty(ACM|USB)\\d+$"),
+	regexp.MustCompile("^kvm$"),
 }
 
 func initStoragePool(c lxd.ContainerServer) error {
