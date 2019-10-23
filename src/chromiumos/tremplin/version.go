@@ -138,9 +138,9 @@ func (o *OsRelease) toProto() *pb.OsRelease {
 	}
 }
 
-func createAptSourceList(milestone int) string {
+func createAptSourceList(milestone int, osVersion string) string {
 	if milestone < 70 {
 		return "deb https://storage.googleapis.com/cros-packages stretch main\n"
 	}
-	return fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d stretch main\n", milestone)
+	return fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersion)
 }

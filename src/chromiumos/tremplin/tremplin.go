@@ -923,10 +923,19 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 	if err == nil {
 		response.OsRelease = osRelease.toProto()
 		if osRelease.id == "debian" {
-			err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone))
-			if err != nil {
-				log.Print("Failed to update guest cros.list:", err)
+			if osRelease.versionID == "9" {
+				err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, "stretch"))
+			} else if osRelease.versionID == "10" {
+				err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, "buster"))
+			} else if osRelease.versionID == "" {
+				// Unstable and maybe testing, closest to buster. We used to
+				// forcibly downgrade them to stretch versions which is why
+				// we upgrade them now instead of leaving it alone.
+				err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, "buster"))
 			}
+		} // else unknown distro so do nothing.
+		if err != nil {
+			log.Print("Failed to update guest cros.list: ", err)
 		}
 	} else {
 		log.Printf("Could not identify container %q guest distro: %v", container.Name, err)
