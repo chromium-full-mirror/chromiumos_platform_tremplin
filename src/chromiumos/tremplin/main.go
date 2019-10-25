@@ -83,7 +83,7 @@ func initNetwork(c lxd.ContainerServer, subnet string) error {
 			"ipv4.address": "%s",
 			"ipv4.dhcp.expiry": "infinite",
 			"ipv6.address": "none",
-			"raw.dnsmasq": "resolv-file=/run/resolv.conf\ndhcp-authoritative\nno-ping"
+			"raw.dnsmasq": "resolv-file=/run/resolv.conf\ndhcp-authoritative\nno-ping\naddn-hosts=/etc/arc_host.conf"
 		}
 	}`, subnet)), &defaultNetwork); err != nil {
 		return err
