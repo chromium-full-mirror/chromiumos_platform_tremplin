@@ -701,24 +701,37 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 			return response, nil
 		}
 
-		op, err := s.lxd.CreateImage(api.ImagesPost{
-			ImagePut: api.ImagePut{},
-		}, &lxd.ImageCreateArgs{
-			MetaFile:        metaReader,
-			MetaName:        filepath.Base(in.MetadataPath),
-			RootfsFile:      rootfsReader,
-			RootfsName:      filepath.Base(in.RootfsPath),
-			ProgressHandler: func(progress ioprogress.ProgressData) {},
-		})
-		if err != nil {
-			response.Status = pb.CreateContainerResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to import image: %v", err)
-			return response, nil
-		}
-		_, err = op.AddHandler(func(op api.Operation) { s.handleCreateImageOperation(in.ContainerName, op) })
-		if err != nil {
-			log.Fatal("Failed to add create image operation handler: ", err)
-		}
+		// For non-unified container images the client will copy the images to a tempfile
+		// before transferring it to the daemon. Since this can take a while, run CreateImage
+		// in a separate goroutine and return CREATING to the host immediately.
+		go func() {
+			op, err := s.lxd.CreateImage(api.ImagesPost{
+				ImagePut: api.ImagePut{},
+			}, &lxd.ImageCreateArgs{
+				MetaFile:        metaReader,
+				MetaName:        filepath.Base(in.MetadataPath),
+				RootfsFile:      rootfsReader,
+				RootfsName:      filepath.Base(in.RootfsPath),
+				ProgressHandler: func(progress ioprogress.ProgressData) {},
+			})
+			if err != nil {
+				req := &pb.ContainerCreationProgress{
+					ContainerName: in.ContainerName,
+					Status:        pb.ContainerCreationProgress_FAILED,
+					FailureReason: fmt.Sprintf("failed to import image: %v", err),
+				}
+				_, err := s.listenerClient.UpdateCreateStatus(context.Background(), req)
+				if err != nil {
+					log.Printf("Could not update create status on host: %v", err)
+					return
+				}
+			}
+			// If the image import was started successfully, register the normal operation handler.
+			_, err = op.AddHandler(func(op api.Operation) { s.handleCreateImageOperation(in.ContainerName, op) })
+			if err != nil {
+				log.Fatal("Failed to add create image operation handler: ", err)
+			}
+		}()
 
 		response.Status = pb.CreateContainerResponse_CREATING
 
