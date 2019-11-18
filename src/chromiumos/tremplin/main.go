@@ -28,7 +28,8 @@ import (
 	"time"
 
 	pb "chromiumos/vm_tools/tremplin_proto"
-	"github.com/lxc/lxd/client"
+
+	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
 	"github.com/mdlayher/vsock"
 	"golang.org/x/sys/unix"
@@ -368,6 +369,19 @@ func initProfile(c lxd.ContainerServer) error {
 }
 
 func initialSetup(c lxd.ContainerServer, subnet string) (int, error) {
+	// Create the milestone file to bind-mount into containers.
+	// This must be done before initializing the profile as LXD now checks
+	// for the existence of storage volumes when the profile is set rather
+	// then when the container is started.
+	milestone, err := getMilestone()
+	if err != nil {
+		return 0, fmt.Errorf("failed to determine Chrome OS milestone: %v", err)
+	}
+
+	if err := ioutil.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
+		return 0, fmt.Errorf("could not write milestone file: %v", err)
+	}
+
 	if err := initStoragePool(c); err != nil {
 		return 0, err
 	}
@@ -406,15 +420,6 @@ func initialSetup(c lxd.ContainerServer, subnet string) (int, error) {
 		return 0, err
 	}
 
-	// Create the milestone file to bind-mount into containers.
-	milestone, err := getMilestone()
-	if err != nil {
-		return 0, fmt.Errorf("failed to determine Chrome OS milestone: %v", err)
-	}
-
-	if err := ioutil.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
-		return 0, fmt.Errorf("could not write milestone file: %v", err)
-	}
 	return milestone, nil
 }
 
