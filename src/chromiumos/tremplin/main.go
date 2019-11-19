@@ -368,6 +368,44 @@ func initProfile(c lxd.ContainerServer) error {
 	return c.UpdateProfile(defaultProfileName, profilePut, etag)
 }
 
+func updateRequiredDevices(c lxd.ContainerServer) error {
+	// LXD now checks by default for the existence of devices
+	// attached to the container when the profile attached to that
+	// container is updated. Because some of the devices are only
+	// created later this will cause an error when we do
+	// initProfile() if any containers already exist. We now set
+	// "required=false" when setting this up, but we have to handle
+	// containers that already exist and have the wrong
+	// configuration.
+	// TODO(sidereal) This code can be removed in M83 since all users should
+	// have this update by then.
+	names, err := c.GetContainerNames()
+	if err != nil {
+		return fmt.Errorf("Couldn't get container names: %v", err)
+	}
+	for _, name := range names {
+		container, etag, err := c.GetContainer(name)
+		if err != nil {
+			return fmt.Errorf("Couldn't get container %s: %v", name, err)
+		}
+
+		containerPut := container.Writable()
+		for _, name := range []string{"container_token", "ssh_authorized_keys", "ssh_host_key"} {
+			containerPut.Devices[name]["required"] = "false"
+		}
+
+		op, err := c.UpdateContainer(name, containerPut, etag)
+		if err != nil {
+			return fmt.Errorf("Couldn't update container %s: %v", name, err)
+		}
+		if err := op.Wait(); err != nil {
+			return fmt.Errorf("Couldn't wait to update container %s: %v", name, err)
+		}
+	}
+
+	return nil
+}
+
 func initialSetup(c lxd.ContainerServer, subnet string) (int, error) {
 	// Create the milestone file to bind-mount into containers.
 	// This must be done before initializing the profile as LXD now checks
@@ -380,6 +418,10 @@ func initialSetup(c lxd.ContainerServer, subnet string) (int, error) {
 
 	if err := ioutil.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
 		return 0, fmt.Errorf("could not write milestone file: %v", err)
+	}
+
+	if err := updateRequiredDevices(c); err != nil {
+		return 0, fmt.Errorf("Failed to change required devices for existing containers: %v", err)
 	}
 
 	if err := initStoragePool(c); err != nil {
