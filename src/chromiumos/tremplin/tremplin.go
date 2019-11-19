@@ -506,9 +506,10 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		}
 
 		containerPut.Devices[b.name] = map[string]string{
-			"source": b.source,
-			"path":   b.dest,
-			"type":   "disk",
+			"source":   b.source,
+			"path":     b.dest,
+			"type":     "disk",
+			"required": "false",
 		}
 	}
 
