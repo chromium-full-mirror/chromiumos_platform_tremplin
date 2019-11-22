@@ -137,7 +137,10 @@ func idRemapRequired(c *api.Container) (bool, error) {
 	}
 
 	// A remap is required only if the last and next IdmapSets don't match.
-	return !reflect.DeepEqual(lastSet, nextSet), nil
+	// In LXD 3.17, the initial value of lastSet becomes the empty list
+	// rather then the initial id map. This does not mean we need to do a
+	// remapping, so don't start one.
+	return lastSet.Len() != 0 && !reflect.DeepEqual(lastSet, nextSet), nil
 }
 
 // tremplinServer is used to implement the gRPC tremplin.Server.
