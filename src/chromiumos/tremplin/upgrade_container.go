@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const upgradeScriptPath = "/opt/google/cros-containers/bin/upgrade_container"
+
 // startUpgradeContainer launches an async container upgrade job.
 func (s *tremplinServer) startUpgradeContainer(containerName string, sourceVersion, targetVersion pb.UpgradeContainerRequest_Version) (pb.UpgradeContainerResponse_Status, string) {
 	if sourceVersion != pb.UpgradeContainerRequest_DEBIAN_STRETCH ||
@@ -25,7 +27,7 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, sourceVersi
 	}
 
 	var ioSink = &stdioSink{}
-	execArgs := []string{"/opt/google/cros-containers/bin/upgrade_container"}
+	execArgs := []string{upgradeScriptPath}
 	op, err := s.execProgramAsync(containerName, execArgs, ioSink, ioSink)
 
 	if err != nil {
@@ -78,4 +80,20 @@ func (s *tremplinServer) babysitContainerUpgrade(op lxd.Operation, ioSink *stdio
 	}()
 	err := op.Wait()
 	done <- err
+}
+
+// cancelUpgradeContainer cancels an in-progress container upgrade job.
+func (s *tremplinServer) cancelUpgradeContainer(containerName string) (pb.CancelUpgradeContainerResponse_Status, string) {
+	if !s.upgradeStatus.SetStatus(containerName, PendingCancel) {
+		return pb.CancelUpgradeContainerResponse_NOT_RUNNING, fmt.Sprintf("Upgrade not in progress for %s", containerName)
+	} else {
+		// LXD doesn't support aborting an in-progress exec but that's all right, kill -9 will abort whatever we want.
+		// babysitContainerUpgrade then detects that the job is no longer running and cleans up + informs the listener.
+		execArgs := []string{"pkill", "-9", "-f", upgradeScriptPath}
+		ret, stdout, stderr, err := s.execProgram(containerName, execArgs)
+		if ret != 0 || err != nil {
+			return pb.CancelUpgradeContainerResponse_FAILED, fmt.Sprintf("Error cancelling upgrade: return code: %d, error: %v, stdout: %s, stderr: %s", ret, err, stdout, stderr)
+		}
+		return pb.CancelUpgradeContainerResponse_CANCELLED, ""
+	}
 }

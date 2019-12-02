@@ -207,7 +207,7 @@ func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
 		}
 	}
 
-	server, _, _ := makeStubs(0.0, 1*time.Millisecond, callback)
+	server, _, _ := makeStubs(0.0, 0*time.Millisecond, callback)
 
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
@@ -261,5 +261,51 @@ func TestUpgradeContainerSendsFailureOnLxdError(t *testing.T) {
 	}
 	if s := <-statusChannel; s != pb.UpgradeContainerProgress_FAILED {
 		t.Fatalf("Didn't get failure message, got %s", s)
+	}
+}
+
+func TestCancelNotRunning(t *testing.T) {
+	ch := make(chan pb.UpgradeContainerProgress)
+	callback := func(status pb.UpgradeContainerProgress) {
+		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
+			ch <- status
+		}
+	}
+	server, _, _ := makeStubs(0.0, 0*time.Millisecond, callback)
+
+	status, _ := server.cancelUpgradeContainer("test")
+
+	if status != pb.CancelUpgradeContainerResponse_NOT_RUNNING {
+		t.Errorf("Unexpected status, got: %s, want: %s.", status, pb.CancelUpgradeContainerResponse_NOT_RUNNING)
+	}
+}
+
+func TestCancelPkillFailed(t *testing.T) {
+	done := make(chan bool)
+	callback := func(status pb.UpgradeContainerProgress) {
+		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
+			done <- true
+		}
+	}
+
+	server, _, operation := makeStubs(0.0, 0*time.Millisecond, callback)
+
+	status, _ := server.startUpgradeContainer("test", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	if status != pb.UpgradeContainerResponse_STARTED {
+		t.Fatalf("Failed to start, got %s", status)
+	}
+
+	// Failed to cancel.
+	operation.apiOperation.Metadata["return"] = 127.0
+	cancelStatus, _ := server.cancelUpgradeContainer("test")
+	if cancelStatus != pb.CancelUpgradeContainerResponse_FAILED {
+		t.Errorf("Unexpected status, got: %s, want: %s.", cancelStatus, pb.CancelUpgradeContainerResponse_FAILED)
+	}
+
+	// If we retry should be able to successfully cancel i.e. a failed cancel doesn't put us in a bad state.
+	operation.apiOperation.Metadata["return"] = 0.0
+	cancelStatus, _ = server.cancelUpgradeContainer("test")
+	if cancelStatus != pb.CancelUpgradeContainerResponse_CANCELLED {
+		t.Errorf("Unexpected status, got: %s, want: %s.", cancelStatus, pb.CancelUpgradeContainerResponse_CANCELLED)
 	}
 }

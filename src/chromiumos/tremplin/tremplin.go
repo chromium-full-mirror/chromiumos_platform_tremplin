@@ -1852,6 +1852,9 @@ func (s *tremplinServer) UpgradeContainer(ctx context.Context, in *pb.UpgradeCon
 
 // CancelUpgradeContainer implements (or will) tremplin.CancelUpgradeContainer.
 func (s *tremplinServer) CancelUpgradeContainer(ctx context.Context, in *pb.CancelUpgradeContainerRequest) (*pb.CancelUpgradeContainerResponse, error) {
-	log.Printf("Not implemented")
-	return &pb.CancelUpgradeContainerResponse{Status: pb.CancelUpgradeContainerResponse_UNKNOWN}, nil
+	status, msg := s.cancelUpgradeContainer(in.ContainerName)
+	return &pb.CancelUpgradeContainerResponse{
+		Status:        status,
+		FailureReason: msg,
+	}, nil
 }
