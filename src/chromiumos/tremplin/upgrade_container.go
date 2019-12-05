@@ -25,7 +25,7 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, sourceVersi
 	}
 
 	var ioSink = &stdioSink{}
-	execArgs := []string{"/opt/google/cros-containers/bin/upgrade_container.sh"}
+	execArgs := []string{"/opt/google/cros-containers/bin/upgrade_container"}
 	op, err := s.execProgramAsync(containerName, execArgs, ioSink, ioSink)
 
 	if err != nil {
