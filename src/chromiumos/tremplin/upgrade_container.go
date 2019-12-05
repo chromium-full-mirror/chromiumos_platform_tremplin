@@ -64,6 +64,7 @@ func (s *tremplinServer) babysitContainerUpgrade(op lxd.Operation, ioSink *stdio
 						ContainerName:    containerName,
 						Status:           pb.UpgradeContainerProgress_FAILED,
 						ProgressMessages: strings.Split(ioSink.ReadString(), "\n"),
+						FailureReason:    fmt.Sprintf("Upgrade ended with return code %v, lxd exec error %v", ret, err),
 					}
 					s.listenerClient.UpgradeContainerStatus(context.Background(), progress)
 				} else {
@@ -71,6 +72,7 @@ func (s *tremplinServer) babysitContainerUpgrade(op lxd.Operation, ioSink *stdio
 						ContainerName:    containerName,
 						Status:           pb.UpgradeContainerProgress_SUCCEEDED,
 						ProgressMessages: strings.Split(ioSink.ReadString(), "\n"),
+						FailureReason:    fmt.Sprintf("Upgrade ended with return code %v, lxd exec error %v", ret, err),
 					}
 					s.listenerClient.UpgradeContainerStatus(context.Background(), progress)
 				}

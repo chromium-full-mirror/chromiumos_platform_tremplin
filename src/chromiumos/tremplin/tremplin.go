@@ -1843,6 +1843,7 @@ func (s *tremplinServer) CancelImportContainer(ctx context.Context, in *pb.Cance
 
 // UpgradeContainer implements tremplin.UpgradeContainer.
 func (s *tremplinServer) UpgradeContainer(ctx context.Context, in *pb.UpgradeContainerRequest) (*pb.UpgradeContainerResponse, error) {
+	log.Printf("Received UpgradeContainer RPC: %s", in.ContainerName)
 	status, msg := s.startUpgradeContainer(in.ContainerName, in.SourceVersion, in.TargetVersion)
 	return &pb.UpgradeContainerResponse{
 		Status:        status,
@@ -1852,6 +1853,7 @@ func (s *tremplinServer) UpgradeContainer(ctx context.Context, in *pb.UpgradeCon
 
 // CancelUpgradeContainer implements (or will) tremplin.CancelUpgradeContainer.
 func (s *tremplinServer) CancelUpgradeContainer(ctx context.Context, in *pb.CancelUpgradeContainerRequest) (*pb.CancelUpgradeContainerResponse, error) {
+	log.Printf("Received CancelUpgradeContainer RPC: %s", in.ContainerName)
 	status, msg := s.cancelUpgradeContainer(in.ContainerName)
 	return &pb.CancelUpgradeContainerResponse{
 		Status:        status,
