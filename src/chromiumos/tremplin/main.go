@@ -391,7 +391,9 @@ func updateRequiredDevices(c lxd.ContainerServer) error {
 
 		containerPut := container.Writable()
 		for _, name := range []string{"container_token", "ssh_authorized_keys", "ssh_host_key"} {
-			containerPut.Devices[name]["required"] = "false"
+			if _, exists := containerPut.Devices[name]; exists {
+				containerPut.Devices[name]["required"] = "false"
+			}
 		}
 
 		op, err := c.UpdateContainer(name, containerPut, etag)
