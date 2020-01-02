@@ -103,17 +103,17 @@ func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got status %s", status)
+		t.Fatalf("Failed to start, got status %v", status)
 	}
 
 	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_ALREADY_RUNNING {
-		t.Fatalf("Failed to correctly fail when an upgrade is already running, got status %s", status)
+		t.Fatalf("Failed to correctly fail when an upgrade is already running, got status %v", status)
 	}
 
 	status, _ = server.startUpgradeContainer("test2", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to allow multiple upgrades on separate containers, got status %s", status)
+		t.Fatalf("Failed to allow multiple upgrades on separate containers, got status %v", status)
 	}
 }
 
@@ -140,14 +140,14 @@ func TestStartUpgradeContainerCanRetryAfterFailure(t *testing.T) {
 	operation.apiOperation.Metadata["return"] = 1.0
 	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start on retry after immediate failure, got status %s", status)
+		t.Fatalf("Failed to start on retry after immediate failure, got status %v", status)
 	}
 
 	// Wait until the above completes.
 	<-done
 	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start on retry after eventual failure, got status %s", status)
+		t.Fatalf("Failed to start on retry after eventual failure, got status %v", status)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 	for _, table := range tables {
 		status, _ := server.startUpgradeContainer(fmt.Sprintf("%d->%d", table.from, table.to), table.from, table.to)
 		if status != table.expected {
-			t.Errorf("Status of (%s -> %s) was incorrect, got: %s, want: %s.", table.from, table.to, status, table.expected)
+			t.Errorf("Status of (%v -> %v) was incorrect, got: %v, want: %v.", table.from, table.to, status, table.expected)
 		}
 	}
 }
@@ -188,11 +188,11 @@ func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %s", status)
+		t.Fatalf("Failed to start, got %v", status)
 	}
 	s := <-statusChannel
 	if s.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
-		t.Fatalf("Didn't get in-progress message, got %s", s)
+		t.Fatalf("Didn't get in-progress message, got %v", s)
 	}
 	if len(s.ProgressMessages) == 0 {
 		t.Fatal("Didn't get any progress messages")
@@ -212,11 +212,11 @@ func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %s", status)
+		t.Fatalf("Failed to start, got %v", status)
 	}
 	s := <-ch
 	if s.Status != pb.UpgradeContainerProgress_SUCCEEDED {
-		t.Fatalf("Didn't get success message, got %s", s)
+		t.Fatalf("Didn't get success message, got %v", s)
 	}
 	if !contains(s.ProgressMessages, "Done message") {
 		t.Fatalf("Didn't see expected end message, only saw: %v", s.ProgressMessages)
@@ -236,10 +236,10 @@ func TestUpgradeContainerSendsFailureOnUnsuccessfulEnd(t *testing.T) {
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %s", status)
+		t.Fatalf("Failed to start, got %v", status)
 	}
 	if s := <-statusChannel; s != pb.UpgradeContainerProgress_FAILED {
-		t.Fatalf("Didn't get failure message, got %s", s)
+		t.Fatalf("Didn't get failure message, got %v", s)
 	}
 }
 
@@ -257,10 +257,10 @@ func TestUpgradeContainerSendsFailureOnLxdError(t *testing.T) {
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %s", status)
+		t.Fatalf("Failed to start, got %v", status)
 	}
 	if s := <-statusChannel; s != pb.UpgradeContainerProgress_FAILED {
-		t.Fatalf("Didn't get failure message, got %s", s)
+		t.Fatalf("Didn't get failure message, got %v", s)
 	}
 }
 
@@ -276,7 +276,7 @@ func TestCancelNotRunning(t *testing.T) {
 	status, _ := server.cancelUpgradeContainer("test")
 
 	if status != pb.CancelUpgradeContainerResponse_NOT_RUNNING {
-		t.Errorf("Unexpected status, got: %s, want: %s.", status, pb.CancelUpgradeContainerResponse_NOT_RUNNING)
+		t.Errorf("Unexpected status, got: %v, want: %v.", status, pb.CancelUpgradeContainerResponse_NOT_RUNNING)
 	}
 }
 
@@ -294,20 +294,20 @@ func TestCancelPkillFailed(t *testing.T) {
 
 	status, _ := server.startUpgradeContainer("test", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %s", status)
+		t.Fatalf("Failed to start, got %v", status)
 	}
 
 	// Failed to cancel.
 	operation.apiOperation.Metadata["return"] = 127.0
 	cancelStatus, _ := server.cancelUpgradeContainer("test")
 	if cancelStatus != pb.CancelUpgradeContainerResponse_FAILED {
-		t.Errorf("Unexpected status, got: %s, want: %s.", cancelStatus, pb.CancelUpgradeContainerResponse_FAILED)
+		t.Errorf("Unexpected status, got: %v, want: %v.", cancelStatus, pb.CancelUpgradeContainerResponse_FAILED)
 	}
 
 	// If we retry should be able to successfully cancel i.e. a failed cancel doesn't put us in a bad state.
 	operation.apiOperation.Metadata["return"] = 0.0
 	cancelStatus, _ = server.cancelUpgradeContainer("test")
 	if cancelStatus != pb.CancelUpgradeContainerResponse_CANCELLED {
-		t.Errorf("Unexpected status, got: %s, want: %s.", cancelStatus, pb.CancelUpgradeContainerResponse_CANCELLED)
+		t.Errorf("Unexpected status, got: %v, want: %v.", cancelStatus, pb.CancelUpgradeContainerResponse_CANCELLED)
 	}
 }
