@@ -281,6 +281,8 @@ func TestCancelNotRunning(t *testing.T) {
 }
 
 func TestCancelPkillFailed(t *testing.T) {
+	t.Skip("skipping flaky test, see https://crbug.com/1038677")
+
 	done := make(chan bool)
 	callback := func(status pb.UpgradeContainerProgress) {
 		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
