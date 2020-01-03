@@ -41,9 +41,13 @@ import (
 const (
 	backupSnapshot      = "rootfs-backup"
 	importContainerName = "rootfs-import"
+	createContainerName = "crostini-inprogress-create"
 	suffixRecover       = "-crostini-recover"
 	suffixRemap         = "-crostini-remap"
 	shiftSnapshot       = "rootfs-shift"
+
+	tremplinCreatedKey = "createdByTremplin"
+	setupFinishedKey   = "tremplinSetupFinished"
 
 	lingerPath         = "/var/lib/systemd/linger"
 	primaryUserID      = 1000
@@ -561,7 +565,12 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 
 	switch opAPI.StatusCode {
 	case api.Success:
-		req.Status = pb.ContainerStartProgress_STARTED
+		if err := s.setContainerMetadataKey(container.Name, setupFinishedKey); err != nil {
+			req.Status = pb.ContainerStartProgress_FAILED
+			req.FailureReason = fmt.Sprintf("Error marking setup finished on container: %v", err)
+		} else {
+			req.Status = pb.ContainerStartProgress_STARTED
+		}
 	case api.Cancelled:
 		req.Status = pb.ContainerStartProgress_CANCELLED
 	case api.Failure:
@@ -590,7 +599,7 @@ func (s *tremplinServer) handleCreateImageOperation(name string, op api.Operatio
 		}
 
 		containersPost := api.ContainersPost{
-			Name: name,
+			Name: createContainerName,
 			Source: api.ContainerSource{
 				Type:        "image",
 				Fingerprint: fingerprint,
@@ -602,7 +611,7 @@ func (s *tremplinServer) handleCreateImageOperation(name string, op api.Operatio
 			req.FailureReason = fmt.Sprintf("failed to create container from image: %v", err)
 			break
 		}
-		_, err = op.AddHandler(func(op api.Operation) { s.handleCreateOperation(op) })
+		_, err = op.AddHandler(func(op api.Operation) { s.handleCreateOperation(op, name) })
 		if err != nil {
 			log.Fatal("Failed to add create operation handler: ", err)
 		}
@@ -624,7 +633,28 @@ func (s *tremplinServer) handleCreateImageOperation(name string, op api.Operatio
 	}
 }
 
-func (s *tremplinServer) handleCreateOperation(op api.Operation) {
+// setContainerMetadataKey sets the given key on the requested container
+// (i.e. isContainerMetadataKeySet will return true for it)
+func (s *tremplinServer) setContainerMetadataKey(containerName string, key string) error {
+	metadata, etag, err := s.lxd.GetContainerMetadata(containerName)
+	if err != nil {
+		return err
+	}
+	metadata.Properties[key] = "true"
+	return s.lxd.SetContainerMetadata(containerName, *metadata, etag)
+}
+
+// isContainerMetadataKeySet returns true/false if a given key is set/not set
+// on the specified container.
+func (s *tremplinServer) isContainerMetadataKeySet(containerName string, key string) (bool, error) {
+	metadata, _, err := s.lxd.GetContainerMetadata(containerName)
+	if err != nil {
+		return false, err
+	}
+	return metadata.Properties[key] == "true", nil
+}
+
+func (s *tremplinServer) handleCreateOperation(op api.Operation, finalName string) {
 	containers := op.Resources["containers"]
 
 	if len(containers) != 1 {
@@ -632,14 +662,8 @@ func (s *tremplinServer) handleCreateOperation(op api.Operation) {
 		return
 	}
 
-	name, err := getContainerName(containers[0])
-	if err != nil {
-		log.Printf("Failed to get container name for operation: %v", err)
-		return
-	}
-
 	req := &pb.ContainerCreationProgress{
-		ContainerName: name,
+		ContainerName: finalName,
 	}
 
 	switch op.StatusCode {
@@ -649,7 +673,15 @@ func (s *tremplinServer) handleCreateOperation(op api.Operation) {
 		// it can do yet.
 		return
 	case api.Success:
-		req.Status = pb.ContainerCreationProgress_CREATED
+		if err := s.setContainerMetadataKey(createContainerName, tremplinCreatedKey); err != nil {
+			req.Status = pb.ContainerCreationProgress_FAILED
+			req.FailureReason = fmt.Sprintf("Error marking container as being a Tremplin container: %v", err)
+		} else if err = s.renameContainer(createContainerName, finalName); err != nil {
+			req.Status = pb.ContainerCreationProgress_FAILED
+			req.FailureReason = fmt.Sprintf("Error renaming container to final name: %v", err)
+		} else {
+			req.Status = pb.ContainerCreationProgress_CREATED
+		}
 	case api.Running:
 		req.Status = pb.ContainerCreationProgress_DOWNLOADING
 		progress, ok := op.Metadata["download_progress"].(string)
@@ -671,11 +703,28 @@ func (s *tremplinServer) handleCreateOperation(op api.Operation) {
 		req.FailureReason = fmt.Sprintf("unhandled create status: %s", op.Status)
 	}
 
-	_, err = s.listenerClient.UpdateCreateStatus(context.Background(), req)
+	_, err := s.listenerClient.UpdateCreateStatus(context.Background(), req)
 	if err != nil {
 		log.Printf("Could not update create status on host: %v", err)
 		return
 	}
+}
+
+func (s *tremplinServer) isContainerSetUp(containerName string) (bool, error) {
+	createdByTremplin, err := s.isContainerMetadataKeySet(containerName, tremplinCreatedKey)
+	if err != nil {
+		return false, err
+	}
+	if !createdByTremplin {
+		// If we weren't created by tremplin (or were created before we started
+		// recording this) assume it's set up correctly.
+		return true, nil
+	}
+	setupComplete, err := s.isContainerMetadataKeySet(containerName, setupFinishedKey)
+	if err != nil {
+		return false, err
+	}
+	return setupComplete, nil
 }
 
 // CreateContainer implements tremplin.CreateContainer.
@@ -686,9 +735,21 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 
 	container, _, _ := s.getContainerWithRecovery(in.ContainerName)
 	if container != nil {
-		response.Status = pb.CreateContainerResponse_EXISTS
-		return response, nil
+		ok, err := s.isContainerSetUp(in.ContainerName)
+		if err == nil && !ok {
+			log.Printf("Found incomplete tremplin-managed container. Deleting and creating a new container from scratch.")
+			s.deleteContainer(in.ContainerName)
+		} else {
+			if err != nil {
+				log.Printf("Error: unable to check metadata for an existing container: %v. Skipped setup complete check.", err)
+			}
+			response.Status = pb.CreateContainerResponse_EXISTS
+			return response, nil
+		}
 	}
+
+	// If a previous CreateContainer was interrupted delete the incomplete container and start fresh.
+	s.deleteContainer(createContainerName)
 
 	// Import the image from tarballs.
 	if len(in.RootfsPath) > 0 && len(in.MetadataPath) > 0 {
@@ -766,7 +827,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 	}
 
 	containersPost := api.ContainersPost{
-		Name: in.ContainerName,
+		Name: createContainerName,
 		Source: api.ContainerSource{
 			Type:  "image",
 			Alias: alias.Name,
@@ -779,7 +840,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 		return response, nil
 	}
 
-	_, err = op.AddHandler(func(op api.Operation) { s.handleCreateOperation(op) })
+	_, err = op.AddHandler(func(op api.Operation) { s.handleCreateOperation(op, in.ContainerName) })
 	if err != nil {
 		log.Fatal("Failed to add create operation handler: ", err)
 	}
