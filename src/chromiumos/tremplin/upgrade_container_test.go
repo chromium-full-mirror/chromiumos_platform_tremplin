@@ -281,21 +281,17 @@ func TestCancelNotRunning(t *testing.T) {
 }
 
 func TestCancelPkillFailed(t *testing.T) {
-	t.Skip("skipping flaky test, see https://crbug.com/1038677")
-
-	done := make(chan bool)
-	callback := func(status pb.UpgradeContainerProgress) {
-		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
-			done <- true
-		}
-	}
-
-	server, _, operation := makeStubs(0.0, 0*time.Millisecond, callback)
+	// Our upgrade sleeps for a very long time in the background, we don't wait for or need it to finish so it's fine.
+	// This needs to be long enough that it's still running when we cancel.
+	server, _, operation := makeStubs(0.0, 1*time.Minute, nil)
 
 	status, _ := server.startUpgradeContainer("test", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start, got %v", status)
 	}
+
+	// Set the wait time on our stub back to 0 so cancelling doesn't take a minute.
+	operation.waitTime = 0 * time.Millisecond
 
 	// Failed to cancel.
 	operation.apiOperation.Metadata["return"] = 127.0
