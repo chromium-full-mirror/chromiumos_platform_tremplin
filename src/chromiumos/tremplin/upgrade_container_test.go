@@ -281,6 +281,7 @@ func TestCancelNotRunning(t *testing.T) {
 }
 
 func TestCancelPkillFailed(t *testing.T) {
+	t.Skip("skipping flaky test, see https://crbug.com/1044631")
 	// Our upgrade sleeps for a very long time in the background, we don't wait for or need it to finish so it's fine.
 	// This needs to be long enough that it's still running when we cancel.
 	server, _, operation := makeStubs(0.0, 1*time.Minute, nil)
