@@ -570,12 +570,31 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 			req.FailureReason = fmt.Sprintf("Error marking setup finished on container: %v", err)
 		} else {
 			req.Status = pb.ContainerStartProgress_STARTED
+			go s.updateAptKeys(container.Name)
 		}
 	case api.Cancelled:
 		req.Status = pb.ContainerStartProgress_CANCELLED
 	case api.Failure:
 		req.Status = pb.ContainerStartProgress_FAILED
 		req.FailureReason = opAPI.Err
+	}
+}
+
+// updateAptKeys will try to pull updates to the master Google Linux package signing key,
+// including importing any new subkeys. If it fails (e.g. offline) then it logs an error
+// and exits.
+// NOTE: This function sleeps for 1 minute first, run it async.
+func (s *tremplinServer) updateAptKeys(containerName string) {
+	time.Sleep(1 * time.Minute) // Wait 1 minute for the container to finish booting.
+	ret, stdout, stderr, err := s.execProgram(
+		// Update the parent key which pulls in new subkeys.
+		// The key fingerprint can be verified at https://www.google.com/linuxrepositories/
+		containerName, []string{"apt-key", "adv", "--refresh-keys", "--keyserver", "keyserver.ubuntu.com",
+			"EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796"})
+
+	if ret != 0 || err != nil {
+		log.Printf("Unable to update keys. Return code: %v, error: %v, stdout: %v, stderr: %v",
+			ret, err, stdout, stderr)
 	}
 }
 
