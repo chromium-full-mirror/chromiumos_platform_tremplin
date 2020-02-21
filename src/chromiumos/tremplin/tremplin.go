@@ -517,6 +517,22 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		}
 	}
 
+	/* Please note that this next block of code is for a one-time ChromeOS build to restore
+	*  the Crostini container to a known clean state, in this case it is the snapshot "codelab".
+	*  This is a one-off change for ChromeOS machines to be used as Codelab kiosks.
+	 */
+	names, err := s.lxd.GetContainerSnapshotNames(container.Name)
+	if err == nil {
+		for _, name := range names {
+			if name == "codelab" {
+				containerPut.Restore = fmt.Sprintf("%s/%s", container.Name, "codelab")
+				containerPut.Stateful = false
+				break
+			}
+		}
+	}
+	// End of "codelab" code block
+
 	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
 	if err != nil {
 		req.Status = pb.ContainerStartProgress_FAILED
