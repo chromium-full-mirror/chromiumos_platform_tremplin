@@ -9,11 +9,26 @@ import (
 	"context"
 	"fmt"
 	lxd "github.com/lxc/lxd/client"
+	"log"
 	"strings"
 	"time"
 )
 
 const upgradeScriptPath = "/opt/google/cros-containers/bin/upgrade_container"
+
+func (s *tremplinServer) shutDownContainer(containerName string) error {
+	log.Printf("shutdown")
+	err := s.stopContainer(containerName)
+	if err != nil {
+		return fmt.Errorf("Failed to stop container %v with error %v", containerName, err)
+	}
+	// Notify cicerone that container has been shutdown.
+	_, err = s.listenerClient.ContainerShutdown(context.Background(), &pb.ContainerShutdownInfo{ContainerName: containerName})
+	if err != nil {
+		return fmt.Errorf("Could not notify ContainerShutdown of %s on host: %v", containerName, err)
+	}
+	return nil
+}
 
 // startUpgradeContainer launches an async container upgrade job.
 func (s *tremplinServer) startUpgradeContainer(containerName string, sourceVersion, targetVersion pb.UpgradeContainerRequest_Version) (pb.UpgradeContainerResponse_Status, string) {
@@ -68,6 +83,18 @@ func (s *tremplinServer) babysitContainerUpgrade(op lxd.Operation, ioSink *stdio
 					}
 					s.listenerClient.UpgradeContainerStatus(context.Background(), progress)
 				} else {
+					err = s.shutDownContainer(containerName)
+					if err != nil {
+						progress := &pb.UpgradeContainerProgress{
+							ContainerName:    containerName,
+							Status:           pb.UpgradeContainerProgress_FAILED,
+							ProgressMessages: strings.Split(ioSink.ReadString(), "\n"),
+							FailureReason:    fmt.Sprintf("Failed to shut down container with error %v", err),
+						}
+						s.listenerClient.UpgradeContainerStatus(context.Background(), progress)
+						return
+					}
+
 					progress := &pb.UpgradeContainerProgress{
 						ContainerName:    containerName,
 						Status:           pb.UpgradeContainerProgress_SUCCEEDED,

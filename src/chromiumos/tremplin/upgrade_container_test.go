@@ -42,6 +42,10 @@ func (s lxdStub) ExecContainer(containerName string, exec api.ContainerExecPost,
 	return s.operation, s.execError
 }
 
+func (s lxdStub) UpdateContainerState(containerName string, statePut api.ContainerStatePut, etag string) (lxd.Operation, error) {
+	return s.operation, s.execError
+}
+
 func (s operationStub) Wait() (err error) {
 	time.Sleep(s.waitTime)
 	s.out.Write([]byte("Last in-progress message\nDone message\n"))
@@ -56,6 +60,10 @@ func (s listenerStub) UpgradeContainerStatus(ctx context.Context, in *pb.Upgrade
 	if s.validator != nil {
 		s.validator(*in)
 	}
+	return &pb.EmptyMessage{}, nil
+}
+
+func (s listenerStub) ContainerShutdown(ctx context.Context, in *pb.ContainerShutdownInfo, opts ...grpc.CallOption) (*pb.EmptyMessage, error) {
 	return &pb.EmptyMessage{}, nil
 }
 
@@ -97,9 +105,13 @@ func contains(arr []string, needle string) bool {
 }
 
 func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
+	done := make(chan bool)
+	callback := func(status pb.UpgradeContainerProgress) {
+		done <- true
+	}
 	// Our upgrade sleeps for a very long time in the background, we don't wait for or need it to finish so it's fine.
 	// This needs to be long enough that the second Start runs before the first finishes.
-	server, _, _ := makeStubs(0.0, 1*time.Minute, nil)
+	server, _, _ := makeStubs(0.0, 1*time.Minute, callback)
 
 	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
@@ -115,6 +127,7 @@ func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to allow multiple upgrades on separate containers, got status %v", status)
 	}
+	<-done
 }
 
 // If the upgrade fails we should be able to try upgrading again.

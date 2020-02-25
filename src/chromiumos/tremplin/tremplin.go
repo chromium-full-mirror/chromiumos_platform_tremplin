@@ -272,6 +272,7 @@ func (s *tremplinServer) stopContainer(containerName string) error {
 		Timeout: -1,
 		Force:   true,
 	}
+	log.Printf("stopContainer name: %v lxd: %v", containerName, s.lxd)
 	op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
 	if err != nil {
 		return fmt.Errorf("error calling stop container %s: %v", containerName, err)
