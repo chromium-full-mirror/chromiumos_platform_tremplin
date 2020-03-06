@@ -153,47 +153,72 @@ func GetListeningLocalhostPorts(nsid uintptr) ([]uint16, error) {
 	}
 	defer c.Close()
 
-	s := SockDiagReq{
+	ports := map[uint16]struct{}{}
+	dumpPorts := func(s SockDiagReq) error {
+		b, err := s.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("failed to marshal request: %v", err)
+		}
+
+		req := netlink.Message{
+			Header: netlink.Header{
+				Flags: netlink.Request | netlink.Dump,
+				Type:  SOCK_DIAG_BY_FAMILY,
+			},
+			Data: b,
+		}
+
+		msgs, err := c.Execute(req)
+		if err != nil {
+			return fmt.Errorf("failed to execute request: %v", err)
+		}
+
+		for _, msg := range msgs {
+			var s SockDiagMsg
+			if err := (&s).UnmarshalBinary(msg.Data); err != nil {
+				return fmt.Errorf("failed to unmarshal SockDiagMsg: %v", err)
+			}
+
+			var ip net.IP
+			if s.Family == unix.AF_INET {
+				ip = net.IP(s.SocketID.SrcAddr[:4])
+			} else {
+				ip = net.IP(s.SocketID.SrcAddr[:])
+			}
+			if !ip.IsUnspecified() && !ip.IsLoopback() {
+				continue
+			}
+			ports[s.SocketID.SrcPort] = struct{}{}
+		}
+
+		return nil
+	}
+
+	if err := dumpPorts(SockDiagReq{
 		Family:   unix.AF_INET,
 		Protocol: unix.IPPROTO_TCP,
 		Ext:      0,
 		States:   1 << TCP_LISTEN,
 		SocketID: SockID{},
+	}); err != nil {
+		return nil, err
 	}
 
-	b, err := s.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %v", err)
+	if err := dumpPorts(SockDiagReq{
+		Family:   unix.AF_INET6,
+		Protocol: unix.IPPROTO_TCP,
+		Ext:      0,
+		States:   1 << TCP_LISTEN,
+		SocketID: SockID{},
+	}); err != nil {
+		return nil, err
 	}
 
-	req := netlink.Message{
-		Header: netlink.Header{
-			Flags: netlink.Request | netlink.Dump,
-			Type:  SOCK_DIAG_BY_FAMILY,
-		},
-		Data: b,
+	// Collapse set of ports into a slice.
+	p := []uint16{}
+	for port, _ := range ports {
+		p = append(p, port)
 	}
 
-	msgs, err := c.Execute(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %v", err)
-	}
-
-	ports := []uint16{}
-	for _, msg := range msgs {
-		var s SockDiagMsg
-		if err := (&s).UnmarshalBinary(msg.Data); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal SockDiagMsg: %v", err)
-		}
-
-		// Check that the listening socket is on 0.0.0.0 or 127.0.0.1/8.
-		ip := net.IPv4(s.SocketID.SrcAddr[0], s.SocketID.SrcAddr[1],
-			s.SocketID.SrcAddr[2], s.SocketID.SrcAddr[3])
-		if !ip.IsUnspecified() && !ip.IsLoopback() {
-			continue
-		}
-		ports = append(ports, s.SocketID.SrcPort)
-	}
-
-	return ports, nil
+	return p, nil
 }
