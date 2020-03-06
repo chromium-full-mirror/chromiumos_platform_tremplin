@@ -35,6 +35,8 @@ import (
 	"github.com/lxc/lxd/shared/ioprogress"
 	"github.com/lxc/lxd/shared/osarch"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v2"
 )
 
@@ -1939,4 +1941,77 @@ func (s *tremplinServer) CancelUpgradeContainer(ctx context.Context, in *pb.Canc
 		Status:        status,
 		FailureReason: msg,
 	}, nil
+}
+
+// HostNetworkChanged implements tremplin.HostNetworkChanged.
+func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetworkChangedRequest) (*pb.HostNetworkChangedResponse, error) {
+	log.Printf("Received HostNetworkChanged RPC")
+
+	containers, err := s.lxd.GetContainers()
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get list of containers: %v", err)
+	}
+
+	for _, container := range containers {
+		// Each container's primary network interface needs to have its IPv6
+		// sysctl toggled to force checking for a new address.
+		c, _, err := s.lxd.GetContainerState(container.Name)
+		if err != nil {
+			log.Printf("Failed to get container state for %s: %v", container.Name, err)
+			continue
+		}
+		if c.StatusCode != api.Running {
+			continue
+		}
+
+		hasPublicIPv6Address := func(state api.ContainerStateNetwork) bool {
+			for _, addr := range state.Addresses {
+				if addr.Family != "inet6" {
+					continue
+				}
+
+				if ip := net.ParseIP(addr.Address); ip.IsGlobalUnicast() {
+					return true
+				}
+			}
+
+			return false
+		}
+
+		setDisableIPv6 := func(containerName, interfaceName string, disabled bool) error {
+			sysctlArg := fmt.Sprintf("net.ipv6.conf.%s.disable_ipv6", interfaceName)
+			if disabled {
+				sysctlArg += "=1"
+			} else {
+				sysctlArg += "=0"
+			}
+
+			ret, _, stderr, err := s.execProgram(container.Name, []string{"sysctl", "-w", sysctlArg})
+			if err != nil {
+				return fmt.Errorf("failed to run sysctl for container %s, ifname %s: %v", containerName, interfaceName, err)
+			}
+			if ret != 0 {
+				return fmt.Errorf("failed to set sysctl for container %s, ifname %s: ret %d: %v", containerName, interfaceName, ret, stderr)
+			}
+
+			return nil
+		}
+
+		for ifname, ifstate := range c.Network {
+			if !hasPublicIPv6Address(ifstate) {
+				continue
+			}
+
+			// Toggle the interface's disable_ipv6 sysctl to force the interface to get a new address.
+			// Don't fail on error since we want to attempt to inform every running container.
+			if err := setDisableIPv6(container.Name, ifname, true); err != nil {
+				log.Printf("Failed to disable IPv6 for %s:%s: %v", container.Name, ifname, err)
+			}
+			if err := setDisableIPv6(container.Name, ifname, false); err != nil {
+				log.Printf("Failed to enable IPv6 for %s:%s: %v", container.Name, ifname, err)
+			}
+		}
+	}
+
+	return &pb.HostNetworkChangedResponse{}, nil
 }
