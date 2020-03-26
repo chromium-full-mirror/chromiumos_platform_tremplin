@@ -2016,3 +2016,7 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 
 	return &pb.HostNetworkChangedResponse{}, nil
 }
+
+func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (*pb.StartLxdResponse, error) {
+	return &pb.StartLxdResponse{}, nil
+}
