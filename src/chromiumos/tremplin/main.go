@@ -478,6 +478,7 @@ func vsockHostDialer(addr string, timeout time.Duration) (net.Conn, error) {
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	if logger, err := syslog.New(syslog.LOG_INFO, "tremplin"); err == nil {
 		log.SetOutput(logger)
 	}
