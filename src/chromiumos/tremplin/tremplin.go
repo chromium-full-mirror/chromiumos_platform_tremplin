@@ -152,6 +152,7 @@ func idRemapRequired(c *api.Container) (bool, error) {
 // tremplinServer is used to implement the gRPC tremplin.Server.
 type tremplinServer struct {
 	lxd                         lxd.ContainerServer
+	subnet                      string
 	grpcServer                  *grpc.Server
 	listenerClient              pb.TremplinListenerClient
 	milestone                   int
@@ -159,6 +160,7 @@ type tremplinServer struct {
 	exportImportStatus          TransactionMap
 	upgradeStatus               TransactionMap
 	upgradeClientUpdateInterval time.Duration
+	lxdHelper                   lxdHelper
 }
 
 // execProgramAsync starts running a program in a container.
@@ -2018,5 +2020,9 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 }
 
 func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (*pb.StartLxdResponse, error) {
-	return &pb.StartLxdResponse{}, nil
+	log.Print("Received StartLxd RPC")
+	// Currently we start LXD as we launch Tremplin, so it'll always be running by this point.
+	return &pb.StartLxdResponse{
+		Status: pb.StartLxdResponse_ALREADY_RUNNING,
+	}, nil
 }
