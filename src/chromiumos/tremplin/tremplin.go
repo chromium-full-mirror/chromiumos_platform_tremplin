@@ -149,6 +149,16 @@ func idRemapRequired(c *api.Container) (bool, error) {
 	return lastSet.Len() != 0 && !reflect.DeepEqual(lastSet, nextSet), nil
 }
 
+// Checks if |privilegeLevel| is valid.
+func isPrivilegeLevelValid(privilegeLevel pb.StartContainerRequest_PrivilegeLevel) bool {
+	switch privilegeLevel {
+	case pb.StartContainerRequest_UNCHANGED, pb.StartContainerRequest_UNPRIVILEGED, pb.StartContainerRequest_PRIVILEGED:
+		return true
+	default:
+		return false
+	}
+}
+
 // tremplinServer is used to implement the gRPC tremplin.Server.
 type tremplinServer struct {
 	lxd                         lxd.ContainerServer
@@ -520,6 +530,17 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 			"type":     "disk",
 			"required": "false",
 		}
+	}
+
+	privilegeLevel := in.PrivilegeLevel
+	if !isPrivilegeLevelValid(privilegeLevel) {
+		req.Status = pb.ContainerStartProgress_FAILED
+		req.FailureReason = fmt.Sprintf("bad privilege level value: %d", privilegeLevel)
+		return
+	}
+
+	if privilegeLevel != pb.StartContainerRequest_UNCHANGED {
+		containerPut.Config["security.privileged"] = strconv.FormatBool(privilegeLevel == pb.StartContainerRequest_PRIVILEGED)
 	}
 
 	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
@@ -1016,7 +1037,36 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		return response, nil
 	}
 
+	// If the container is already running check if the privilege level needs to be updated. If the update failed then treat it as an error.
+	// Changing privileges, especially going from privileged to non-privileged, shouldn't silently fail as the user may believe in the wrong
+	// security model.
 	if container.StatusCode == api.Running {
+		response.Status = pb.StartContainerResponse_FAILED
+		privilegeLevel := in.PrivilegeLevel
+		if !isPrivilegeLevelValid(privilegeLevel) {
+			response.FailureReason = fmt.Sprintf("bad privilege level value: %d", privilegeLevel)
+			return response, nil
+		}
+
+		if privilegeLevel != pb.StartContainerRequest_UNCHANGED {
+			containerPut := container.Writable()
+			containerPut.Config["security.privileged"] = strconv.FormatBool(privilegeLevel == pb.StartContainerRequest_PRIVILEGED)
+			op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
+			if err != nil {
+				response.FailureReason = fmt.Sprintf("failed to update privilege level: %v", err)
+				return response, nil
+			}
+			if err = op.Wait(); err != nil {
+				response.FailureReason = fmt.Sprintf("failed to update privilege level: %v", err)
+				return response, nil
+			}
+
+			opAPI := op.Get()
+			if opAPI.StatusCode != api.Success {
+				response.FailureReason = fmt.Sprintf("failed to update privilege level: %v", err)
+				return response, nil
+			}
+		}
 		response.Status = pb.StartContainerResponse_RUNNING
 		return response, nil
 	}
