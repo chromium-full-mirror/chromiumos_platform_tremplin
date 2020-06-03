@@ -1195,6 +1195,8 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 		{"cdrom", false},
 		{"dialout", false},
 		{"floppy", false},
+		{"kvm", false},
+		{"libvirt", false},
 		{"plugdev", false},
 		{"sudo", false},
 		{"users", false},
