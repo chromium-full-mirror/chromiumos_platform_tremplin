@@ -71,10 +71,6 @@ func main() {
 		upgradeClientUpdateInterval: 5 * time.Second,
 	}
 
-	if err = server.InitLxd(); err != nil {
-		log.Fatal("Failed to set up LXD: ", err)
-	}
-
 	pb.RegisterTremplinServer(server.grpcServer, &server)
 	reflection.Register(server.grpcServer)
 
