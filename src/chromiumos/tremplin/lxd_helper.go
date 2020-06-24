@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -14,7 +15,14 @@ import (
 	"syscall"
 	"time"
 
+	pb "chromiumos/vm_tools/vm_crash"
+
 	lxd "github.com/lxc/lxd/client"
+	"google.golang.org/grpc"
+)
+
+const (
+	crashHostPort = "7779"
 )
 
 var lxdCmd = []string{"/usr/sbin/lxd", "--group", "lxd", "--syslog"}
@@ -31,29 +39,77 @@ type lxdHelper struct {
 func runWithRetry(cmd func() error, shutdownSignal chan os.Signal, failureWindow time.Duration, numFailures int) {
 	var failures []time.Time
 	for {
+		waitReadySucceeded := make(chan bool)
+		go func() {
+			_, err := lxdWaitready()
+			if err == nil {
+				waitReadySucceeded <- true
+			}
+		}()
+
 		err := cmd()
 		// If we reach here LXD has stopped running or never started.
+
+		// Process shutdownSignal first so we never ignore a
+		// shutdown signal in favour of waitReadySucceeded.
 		select {
 		case <-shutdownSignal:
 			log.Print("Shutting down LXD")
 			// We're shutting down, nothing to do here.
 			return
 		default:
-			// If LXD isn't running, and we're not shutting down, it's an error,
-			// LXD should only terminate when we're shutting down.
-			log.Print("LXD died unexpectedly with error: ", err)
-			for len(failures) > 0 && failures[0].Before(time.Now().Add(-1*failureWindow)) {
-				failures = failures[1:]
-			}
-			if len(failures) >= numFailures {
-				// We can't do anything with no LXD, so give up. Keep Tremplin
-				// running so we can report failures when the user tries to do
-				// anything, which is the best we can offer at the moment.
-				log.Print("LXD keeps dying, giving up. All future calls to Tremplin will fail until VM restart.")
-				return
-			}
-			failures = append(failures, time.Now())
 		}
+
+		// Check if the waitready operation succeeded. If so,
+		// that means LXD started up and then failed, so
+		// indicate that to cicerone.
+		select {
+		case <-waitReadySucceeded:
+			log.Print("LXD died unexpectedly with error: ", err)
+			signalLxdFailure()
+		default:
+			log.Print("LXD failed to start with error: ", err)
+		}
+
+		// At this point we know LXD failed and needs to be
+		// restarted, so do that.
+		for len(failures) > 0 && failures[0].Before(time.Now().Add(-failureWindow)) {
+			failures = failures[1:]
+		}
+		if len(failures) >= numFailures {
+			// We can't do anything with no LXD, so give up. Keep Tremplin
+			// running so we can report failures when the user tries to do
+			// anything, which is the best we can offer at the moment.
+			log.Print("LXD keeps dying, giving up. All future calls to Tremplin will fail until VM restart.")
+
+			// We're now giving up on starting LXD, so signal the LXD failure to cicerone.
+			signalLxdFailure()
+			return
+		}
+		failures = append(failures, time.Now())
+	}
+}
+
+// signalLxdFailure tells cicerone that LXD failed. This is meant to
+// be used only to indicate either failures after startup (i.e. after
+// lxd waitready succeeds) or if we fail to find any way to start up
+// LXD.
+func signalLxdFailure() {
+	conn, err := grpc.Dial(crashHostPort,
+		grpc.WithDialer(vsockHostDialer),
+		grpc.WithInsecure())
+	if err != nil {
+		log.Print("Could not connect to crash listener: ", err)
+		return
+	}
+	defer conn.Close()
+	crashListener := pb.NewCrashListenerClient(conn)
+
+	var failureReport pb.FailureReport
+	failureReport.FailedProcess = "lxd"
+	_, err = crashListener.SendFailureReport(context.Background(), &failureReport)
+	if err != nil {
+		log.Print("Failed to report lxd failure: ", err)
 	}
 }
 
@@ -71,7 +127,7 @@ func (l *lxdHelper) runLxd() error {
 }
 
 // lxdWaitready waits for LXD to be ready to handle requests.
-func (l *lxdHelper) lxdWaitready() (lxd.ContainerServer, error) {
+func lxdWaitready() (lxd.ContainerServer, error) {
 	var lastErr error
 	const lxdReadyTimeout = 2 * time.Minute
 	const lxdInterval = 500 * time.Millisecond
@@ -121,7 +177,7 @@ func (l *lxdHelper) LaunchLxd() (lxd.ContainerServer, error) {
 	}
 	if l.lxd == nil {
 		// Wait for LXD to be ready.
-		c, err := l.lxdWaitready()
+		c, err := lxdWaitready()
 		if err != nil {
 			// Timed out
 			return nil, fmt.Errorf("Timed out waiting for LXD to start. Last error was: %w", err)
