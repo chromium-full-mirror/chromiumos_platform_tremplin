@@ -317,6 +317,11 @@ func initProfile(c lxd.ContainerServer) error {
 				"path":   "/dev/.ssh/sshd_config",
 				"type":   "disk"
 			},
+			"external": {
+				"source": "/mnt/external",
+				"path":   "/mnt/external",
+				"type":   "disk"
+			},
 			"fuse": {
 				"source": "/dev/fuse",
 				"mode":   "0666",
