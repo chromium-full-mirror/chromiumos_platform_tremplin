@@ -776,13 +776,6 @@ func (s *tremplinServer) isContainerSetUp(containerName string) (bool, error) {
 func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateContainerRequest) (*pb.CreateContainerResponse, error) {
 	log.Printf("Received CreateContainer RPC: %s", in.ContainerName)
 
-	// TODO(davidmunro): Once the tests correctly call StartLxd remove from here
-	if s.lxd == nil {
-		log.Printf("LXD not running, was StartLxd called? Starting it")
-		s.InitLxd()
-	}
-	// ...until here.
-
 	response := &pb.CreateContainerResponse{}
 
 	container, _, _ := s.getContainerWithRecovery(in.ContainerName)
@@ -2080,27 +2073,8 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 
 func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (*pb.StartLxdResponse, error) {
 	log.Print("Received StartLxd RPC")
-	if s.lxd != nil {
-		log.Print("LXD already running")
-		return &pb.StartLxdResponse{
-			Status: pb.StartLxdResponse_ALREADY_RUNNING,
-		}, nil
-	}
-
-	go func() {
-		if err := s.InitLxd(); err != nil {
-			log.Printf("Starting LXD failed: %v", err)
-			s.listenerClient.UpdateStartLxdStatus(context.Background(), &pb.StartLxdProgress{
-				Status:        pb.StartLxdProgress_FAILED,
-				FailureReason: fmt.Sprintf("Starting LXD failed: %v", err),
-			})
-		} else {
-			s.listenerClient.UpdateStartLxdStatus(context.Background(), &pb.StartLxdProgress{
-				Status: pb.StartLxdProgress_STARTED,
-			})
-		}
-	}()
+	// Currently we start LXD as we launch Tremplin, so it'll always be running by this point.
 	return &pb.StartLxdResponse{
-		Status: pb.StartLxdResponse_STARTING,
+		Status: pb.StartLxdResponse_ALREADY_RUNNING,
 	}, nil
 }
