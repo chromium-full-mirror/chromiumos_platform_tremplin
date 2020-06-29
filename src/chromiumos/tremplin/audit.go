@@ -21,6 +21,8 @@ import (
 	"github.com/lxc/lxd/shared/api"
 )
 
+const errAuditRuleExists = "rule exists"
+
 // UpdatePorts queries for listening ports in all running containers and sends
 // those ports to the host.
 func (s *tremplinServer) UpdatePorts() error {
@@ -126,7 +128,7 @@ func startAuditListener(s *tremplinServer) error {
 			return fmt.Errorf("failed to compile listen rule: %v", err)
 		}
 
-		if err := ac.AddRule(compiledRule); err != nil {
+		if err := ac.AddRule(compiledRule); err != nil && err.Error() != errAuditRuleExists {
 			return fmt.Errorf("failed to add listen rule: %v", err)
 		}
 

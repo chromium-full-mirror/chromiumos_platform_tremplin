@@ -17,6 +17,8 @@ import (
 	lxd "github.com/lxc/lxd/client"
 )
 
+var lxdCmd = []string{"/usr/sbin/lxd", "--group", "lxd", "--syslog"}
+
 type lxdHelper struct {
 	lxd            lxd.ContainerServer
 	process        *os.Process
@@ -57,7 +59,6 @@ func runWithRetry(cmd func() error, shutdownSignal chan os.Signal, failureWindow
 
 // runLxd launches LXD and blocks until LXD exits. Will set l.process.
 func (l *lxdHelper) runLxd() error {
-	lxdCmd := []string{"/usr/sbin/lxd", "--group", "lxd", "--syslog"}
 	log.Printf("Running %q", strings.Join(lxdCmd, " "))
 	cmd := exec.Command(lxdCmd[0], lxdCmd[1:]...)
 	err := cmd.Start()
