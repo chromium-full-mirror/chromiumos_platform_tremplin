@@ -282,24 +282,37 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 		shell = "/bin/bash"
 
 		_, s, err := pd.lxd.GetContainerFile(pd.containerName, homedir)
-		if err == nil && s.Type == "directory" {
-			return fmt.Errorf("homedir already exists for user %q", username)
+
+		// If there's a non-directory file where the home
+		// directory needs to go, get rid of it. If there's
+		// already a directory there though, then just leave
+		// it alone because the user might want to keep it.
+		removeFile := err == nil && s.Type != "directory"
+		createHomeDir := !(err == nil && s.Type == "directory")
+
+		if removeFile {
+			err := pd.lxd.DeleteContainerFile(pd.containerName, homedir)
+			if err != nil {
+				return fmt.Errorf("%v type file at path %v must be removed to create home directory, but could not be: %v", s.Type, homedir, err)
+			}
 		}
 
-		if err := pd.lxd.CreateContainerFile(pd.containerName, homedir, lxd.ContainerFileArgs{
-			UID:  int64(uid),
-			GID:  int64(uid),
-			Mode: 0755,
-			Type: "directory",
-		}); err != nil {
-			return fmt.Errorf("failed to create homedir: %v", err)
-		}
+		if createHomeDir {
+			if err := pd.lxd.CreateContainerFile(pd.containerName, homedir, lxd.ContainerFileArgs{
+				UID:  int64(uid),
+				GID:  int64(uid),
+				Mode: 0755,
+				Type: "directory",
+			}); err != nil {
+				return fmt.Errorf("failed to create homedir: %v", err)
+			}
 
-		// Copy home directory skeleton from /etc/skel if it exists.
-		_, s, err = pd.lxd.GetContainerFile(pd.containerName, "/etc/skel")
-		if err == nil && s.Type == "directory" {
-			if err := pd.recursiveCopy("/etc/skel", homedir, uid); err != nil {
-				return fmt.Errorf("failed to populate homedir: %v", err)
+			// Copy home directory skeleton from /etc/skel if it exists.
+			_, s, err = pd.lxd.GetContainerFile(pd.containerName, "/etc/skel")
+			if err == nil && s.Type == "directory" {
+				if err := pd.recursiveCopy("/etc/skel", homedir, uid); err != nil {
+					return fmt.Errorf("failed to populate homedir: %v", err)
+				}
 			}
 		}
 	}
