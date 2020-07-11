@@ -75,10 +75,6 @@ func main() {
 		log.Fatal("LXD is already running, but failed to stop: ", err)
 	}
 
-	if err = server.InitLxd(); err != nil {
-		log.Fatal("Failed to set up LXD: ", err)
-	}
-
 	pb.RegisterTremplinServer(server.grpcServer, &server)
 	reflection.Register(server.grpcServer)
 
