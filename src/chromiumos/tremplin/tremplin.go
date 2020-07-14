@@ -2097,3 +2097,9 @@ func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (
 		Status: pb.StartLxdResponse_STARTING,
 	}, nil
 }
+
+func (s *tremplinServer) GetDebugInfo(ctx context.Context, in *pb.GetDebugInfoRequest) (*pb.GetDebugInfoResponse, error) {
+	return &pb.GetDebugInfoResponse{
+		DebugInformation: "",
+	}, nil
+}
