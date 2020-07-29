@@ -2075,9 +2075,36 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 
 func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (*pb.StartLxdResponse, error) {
 	log.Print("Received StartLxd RPC")
-	// Currently we start LXD as we launch Tremplin, so it'll always be running by this point.
+
+	if !s.features.IsStartLxdEnabled() {
+		// We start LXD as we launch Tremplin without START_LXD set, so it'll be running by this point.
+		return &pb.StartLxdResponse{
+			Status: pb.StartLxdResponse_ALREADY_RUNNING,
+		}, nil
+	}
+
+	if s.lxd != nil {
+		log.Print("LXD already running")
+		return &pb.StartLxdResponse{
+			Status: pb.StartLxdResponse_ALREADY_RUNNING,
+		}, nil
+	}
+
+	go func() {
+		if err := s.InitLxd(); err != nil {
+			log.Printf("Starting LXD failed: %v", err)
+			s.listenerClient.UpdateStartLxdStatus(context.Background(), &pb.StartLxdProgress{
+				Status:        pb.StartLxdProgress_FAILED,
+				FailureReason: fmt.Sprintf("Starting LXD failed: %v", err),
+			})
+		} else {
+			s.listenerClient.UpdateStartLxdStatus(context.Background(), &pb.StartLxdProgress{
+				Status: pb.StartLxdProgress_STARTED,
+			})
+		}
+	}()
 	return &pb.StartLxdResponse{
-		Status: pb.StartLxdResponse_ALREADY_RUNNING,
+		Status: pb.StartLxdResponse_STARTING,
 	}, nil
 }
 
