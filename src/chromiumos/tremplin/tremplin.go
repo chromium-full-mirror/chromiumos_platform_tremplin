@@ -58,6 +58,7 @@ const (
 	androidEverybodyID = 665357
 
 	exportWriterBufferSize = 16 * 1024 * 1024 // 16Mib.
+
 )
 
 // downloadRegexp extracts the download type and progress percentage from
@@ -171,6 +172,7 @@ type tremplinServer struct {
 	upgradeStatus               TransactionMap
 	upgradeClientUpdateInterval time.Duration
 	lxdHelper                   lxdHelper
+	features                    Features
 }
 
 // execProgramAsync starts running a program in a container.

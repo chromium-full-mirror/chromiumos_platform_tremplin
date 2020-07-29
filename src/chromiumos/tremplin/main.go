@@ -28,7 +28,7 @@ import (
 )
 
 // vsockHostDialer dials the vsock host. The addr is in this case is just the
-// port, as the vsock cid is implied to be the host..
+// port, as the vsock cid is implied to be the host.
 func vsockHostDialer(addr string, timeout time.Duration) (net.Conn, error) {
 	port, err := strconv.ParseInt(addr, 10, 32)
 	if err != nil {
@@ -44,6 +44,8 @@ func main() {
 	}
 
 	lxdSubnet := flag.String("lxd_subnet", "", "subnet for LXD in CIDR notation")
+	var features Features
+	flag.Var(&features, "feature", "feature to enable, can specify multiple times for multiple features")
 	flag.Parse()
 	if len(*lxdSubnet) == 0 {
 		log.Fatal("lxd_subnet must be specified")
@@ -69,6 +71,7 @@ func main() {
 		exportImportStatus:          *NewTransactionMap(),
 		upgradeStatus:               *NewTransactionMap(),
 		upgradeClientUpdateInterval: 5 * time.Second,
+		features:                    features,
 	}
 
 	if err = server.StopLxdIfRunning(); err != nil {
