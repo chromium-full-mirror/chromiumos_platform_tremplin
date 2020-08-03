@@ -2082,7 +2082,30 @@ func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (
 }
 
 func (s *tremplinServer) GetDebugInfo(ctx context.Context, in *pb.GetDebugInfoRequest) (*pb.GetDebugInfoResponse, error) {
+	log.Println("Received GetDebugInfo RPC")
+
+	if s.lxd == nil {
+		return &pb.GetDebugInfoResponse{
+			DebugInformation: "LXD not running",
+		}, nil
+
+	}
+
+	reader, err := s.lxd.GetContainerLogfile("penguin", "lxc.log")
+	if err != nil {
+		log.Printf("Error getting container log: %v", err)
+		return &pb.GetDebugInfoResponse{
+			DebugInformation: fmt.Sprintf("Error getting container log: %v", err),
+		}, nil
+	}
+	defer reader.Close()
+
+	bytes, err := ioutil.ReadAll(reader)
+	str := string(bytes)
+	if err != nil {
+		str = fmt.Sprintf("Error reading log: %v. Got:\n%s", err, str)
+	}
 	return &pb.GetDebugInfoResponse{
-		DebugInformation: "",
+		DebugInformation: str,
 	}, nil
 }
