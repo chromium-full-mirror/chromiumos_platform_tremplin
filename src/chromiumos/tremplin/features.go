@@ -6,6 +6,8 @@ package main
 import (
 	pb "chromiumos/vm_tools/vm_rpc"
 	"log"
+	"sort"
+	"strings"
 )
 
 // Features represents the features that have been enabled.
@@ -16,19 +18,18 @@ type Features struct {
 // The docs for flag don't actually say what this is for, but presumably it's to
 // conform to the Stringer interface.
 func (v *Features) String() string {
-	s := ""
 	if v.features == nil {
 		return ""
 	}
+
+	var features []string
 	for feature := range pb.StartTerminaRequest_Feature_name {
 		if v.features[pb.StartTerminaRequest_Feature(feature)] {
-			if s != "" {
-				s += ","
-			}
-			s += pb.StartTerminaRequest_Feature_name[feature]
+			features = append(features, pb.StartTerminaRequest_Feature_name[feature])
 		}
 	}
-	return s
+	sort.Strings(features)
+	return strings.Join(features, ",")
 }
 
 // Set is called when parsing CLI arguments when a new -feature parameter is
