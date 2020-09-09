@@ -461,25 +461,23 @@ func (s *tremplinServer) initialSetup() error {
 func (s *tremplinServer) InitLxd() error {
 	ueventSocket, err := createUeventSocket()
 	if err != nil {
-		log.Fatal("Failed to open uevent netlink connection: ", err)
+		return fmt.Errorf("Failed to open uevent netlink connection: %w", err)
 	}
 	// Let the OS close the uevent socket, we keep it around for the entirety of
 	// tremplin's lifetime.
 
 	c, err := s.lxdHelper.LaunchLxd()
 	if err != nil {
-		log.Fatal("Failed to connect to LXD daemon: ", err)
+		return fmt.Errorf("Failed to connect to LXD daemon: %w", err)
 	}
 	s.lxd = c
 
 	if err := s.initialSetup(); err != nil {
-		log.Fatalf("Failed initialSetup: %v", err)
-		return err
+		return fmt.Errorf("Failed initialSetup: %w", err)
 	}
 
 	if err := startAuditListener(s); err != nil {
-		log.Fatalf("Failed to start audit listener: %v", err)
-		return err
+		return fmt.Errorf("Failed to start audit listener: %w", err)
 	}
 
 	// Listen for device updates.
