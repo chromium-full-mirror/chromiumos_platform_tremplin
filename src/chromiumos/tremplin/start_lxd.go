@@ -27,6 +27,7 @@ import (
 
 const (
 	defaultStoragePoolName = "default"
+	defaultContainerName   = "penguin"
 	defaultProfileName     = "default"
 	defaultNetworkName     = "lxdbr0"
 	defaultListenPort      = 8890
@@ -414,51 +415,91 @@ func (s *tremplinServer) initialSetup() error {
 	}
 
 	if err := updateRequiredDevices(c); err != nil {
-		return fmt.Errorf("Failed to change required devices for existing containers: %v", err)
+		return fmt.Errorf("Failed to change required devices for existing containers: %w", err)
 	}
 
 	if err := initStoragePool(c); err != nil {
-		return err
+		return fmt.Errorf("Failed to init storage pool: %w", err)
 	}
 
 	if err := initNetwork(c, s.subnet); err != nil {
-		return err
+		return fmt.Errorf("Failed to init network: %w", err)
 	}
 
 	if err := initProfile(c); err != nil {
-		return err
+		return fmt.Errorf("Failed to init profile: %w", err)
 	}
 
 	// Create the lxd_conf directory for manual LXD usage.
 	if err := os.MkdirAll(lxdConfPath, 0755); err != nil {
-		return err
+		return fmt.Errorf("Failed to create lxd conf dir: %w", err)
 	}
 
 	// Set the conf dir to be owned by chronos.
 	u, err := user.Lookup("chronos")
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to look up chronos: %w", err)
 	}
 	uid, err := strconv.Atoi(u.Uid)
 	if err != nil {
-		return fmt.Errorf("%q is not a valid uid: %v", u.Uid, err)
+		return fmt.Errorf("%q is not a valid uid: %w", u.Uid, err)
 	}
 	g, err := user.LookupGroup("chronos")
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to look up group: %w", err)
 	}
 	gid, err := strconv.Atoi(g.Gid)
 	if err != nil {
-		return fmt.Errorf("%q is not a valid gid: %v", g.Gid, err)
+		return fmt.Errorf("%q is not a valid gid: %w", g.Gid, err)
 	}
 	if err := os.Chown(lxdConfPath, uid, gid); err != nil {
-		return err
+		return fmt.Errorf("Failed to chown lxd conf: %w", err)
 	}
 
 	return nil
 }
 
+// shouldResetLxdDbBeforeLaunch performs a bunch of checks to decide if we go
+// ahead with wiping and recovering the LXD database. Checks for feature flag
+// being enabled, only a single penguin container. Also returns false on error.
+func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
+	if !s.features.IsResetLxdOnLaunchEnabled() {
+		return false
+	}
+	f, err := os.Open("/mnt/stateful/lxd/containers")
+	if err != nil {
+		log.Print("Error opening container dir to list files: ", err)
+		return false
+	}
+	names, err := f.Readdirnames(0)
+	if err != nil {
+		log.Print("Error listing existing containers: ", err)
+		return false
+	}
+	if len(names) != 1 {
+		// If multiple, at least one isn't ours so skip resetting. If 0, skip
+		// because there's nothing anyway and the reimport will fail.
+		log.Printf("Not resetting LXD DB, found %d containers", len(names))
+		return false
+	}
+	if names[0] != defaultContainerName {
+		log.Printf("Not resetting LXD DB, container wasn't called %s", defaultContainerName)
+		return false
+	}
+	// TODO(davidmunro): Can we detect custom containers which are called penguin?
+	log.Printf("Resetting enabled")
+	return true
+}
+
+// InitLXD sets everything up for LXD, launches it, and performs post-launch
+// config such that LXD is ready for use.
 func (s *tremplinServer) InitLxd() error {
+	// Stop LXD if it's already running (e.g. may be left over from a previous
+	// failed launch).
+	if err := s.StopLxdIfRunning(); err != nil {
+		log.Fatal("LXD is already running, but failed to stop: ", err)
+	}
+
 	ueventSocket, err := createUeventSocket()
 	if err != nil {
 		return fmt.Errorf("Failed to open uevent netlink connection: %w", err)
@@ -466,9 +507,33 @@ func (s *tremplinServer) InitLxd() error {
 	// Let the OS close the uevent socket, we keep it around for the entirety of
 	// tremplin's lifetime.
 
+	shouldReset := s.shouldResetLxdDbBeforeLaunch()
+	if shouldReset {
+		log.Print("Resetting LXD DB prior to launch")
+		err := os.RemoveAll("/mnt/stateful/lxd/database")
+		if err != nil {
+			return fmt.Errorf("Unable to clear the LXD DB: %w", err)
+		}
+	}
+
 	c, err := s.lxdHelper.LaunchLxd()
 	if err != nil {
 		return fmt.Errorf("Failed to connect to LXD daemon: %w", err)
+	}
+	if shouldReset {
+		// shouldResetLxdDbBeforeLaunch returns false if there's no penguin
+		// container, or if there are any non-penguin containers. Since we made
+		// it in here we know we have exactly one container to recover called
+		// penguin (default name).
+		err := recoverContainer(defaultContainerName)
+		if err != nil {
+			// Uh oh. We deleted their existing state (e.g. list of containers)
+			// but weren't able to recover it. The good news is we won't
+			// accidentally overwrite it, initStoragePool, etc will fail since
+			// the storage pool, etc, already exists. The bad news is we can't
+			// start their container. Fail, and we'll try again next time.
+			return fmt.Errorf("Failed to lxd import container: %w", err)
+		}
 	}
 	s.lxd = c
 
@@ -482,5 +547,29 @@ func (s *tremplinServer) InitLxd() error {
 
 	// Listen for device updates.
 	go ueventListen(s.lxd, ueventSocket)
+	return nil
+}
+
+// recoverContainer recovers the named container a la `lxd import`.
+func recoverContainer(name string) error {
+	// LXD will refuse to import a container if all its bindmounts don't exist,
+	// but we don't create the files (or know what to put in them) until later.
+	// We create empty files now, and then they get filled in later.
+	for _, b := range getBindMounts(name, "", "", "") {
+		dir := filepath.Dir(b.source)
+		err := os.MkdirAll(dir, 0644)
+		if err != nil {
+			return fmt.Errorf("Unable to create folder %s: %w", dir, err)
+		}
+		f, err := os.OpenFile(b.source, os.O_RDONLY|os.O_CREATE, 0644)
+		if err != nil {
+			return fmt.Errorf("Unable to create stub file %s: %w", b.source, err)
+		}
+		f.Close()
+	}
+	out, err := execCommand("/usr/sbin/lxd", "import", name)
+	if err != nil {
+		return fmt.Errorf("Error importing container. Stdout/err: %s. Error: %w", out, err)
+	}
 	return nil
 }

@@ -462,6 +462,29 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 	return s.lxd.GetContainer(container.Name)
 }
 
+func getBindMounts(containerName string, token string, hostKey string, containerKey string) []bindMount {
+	return []bindMount{
+		{
+			name:    "container_token",
+			content: token,
+			source:  fmt.Sprintf("/run/tokens/%s_token", containerName),
+			dest:    "/dev/.container_token",
+		},
+		{
+			name:    "ssh_authorized_keys",
+			content: hostKey,
+			source:  fmt.Sprintf("/run/sshd/%s/authorized_keys", containerName),
+			dest:    "/dev/.ssh/ssh_authorized_keys",
+		},
+		{
+			name:    "ssh_host_key",
+			content: containerKey,
+			source:  fmt.Sprintf("/run/sshd/%s/ssh_host_key", containerName),
+			dest:    "/dev/.ssh/ssh_host_key",
+		},
+	}
+}
+
 // startContainer performs pre-processing of the container and starts it.
 // This function is designed to be run async to allow StartContainer to return quickly.
 func (s *tremplinServer) startContainer(container *api.Container, etag string, in *pb.StartContainerRequest, remap bool) {
@@ -492,27 +515,7 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		req.FailureReason = fmt.Sprintf("failed to create ssh key dir: %v", err)
 		return
 	}
-	bindMounts := []bindMount{
-		{
-			name:    "container_token",
-			content: in.Token,
-			source:  fmt.Sprintf("/run/tokens/%s_token", container.Name),
-			dest:    "/dev/.container_token",
-		},
-		{
-			name:    "ssh_authorized_keys",
-			content: in.HostPublicKey,
-			source:  fmt.Sprintf("/run/sshd/%s/authorized_keys", container.Name),
-			dest:    "/dev/.ssh/ssh_authorized_keys",
-		},
-		{
-			name:    "ssh_host_key",
-			content: in.ContainerPrivateKey,
-			source:  fmt.Sprintf("/run/sshd/%s/ssh_host_key", container.Name),
-			dest:    "/dev/.ssh/ssh_host_key",
-		},
-	}
-
+	bindMounts := getBindMounts(container.Name, in.Token, in.HostPublicKey, in.ContainerPrivateKey)
 	for _, b := range bindMounts {
 		// Disregard bind mounts without values.
 		if b.content == "" {
@@ -2118,7 +2121,7 @@ func (s *tremplinServer) GetDebugInfo(ctx context.Context, in *pb.GetDebugInfoRe
 
 	}
 
-	reader, err := s.lxd.GetContainerLogfile("penguin", "lxc.log")
+	reader, err := s.lxd.GetContainerLogfile(defaultContainerName, "lxc.log")
 	if err != nil {
 		log.Printf("Error getting container log: %v", err)
 		return &pb.GetDebugInfoResponse{

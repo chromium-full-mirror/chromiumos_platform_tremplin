@@ -74,10 +74,6 @@ func main() {
 		features:                    features,
 	}
 
-	if err = server.StopLxdIfRunning(); err != nil {
-		log.Fatal("LXD is already running, but failed to stop: ", err)
-	}
-
 	if !features.IsStartLxdEnabled() {
 		if err = server.InitLxd(); err != nil {
 			log.Fatal("Failed to set up LXD: ", err)
