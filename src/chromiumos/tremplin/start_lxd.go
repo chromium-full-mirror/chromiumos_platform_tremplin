@@ -493,7 +493,7 @@ func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
 
 // InitLXD sets everything up for LXD, launches it, and performs post-launch
 // config such that LXD is ready for use.
-func (s *tremplinServer) InitLxd() error {
+func (s *tremplinServer) InitLxd(resetDB bool) error {
 	// Stop LXD if it's already running (e.g. may be left over from a previous
 	// failed launch).
 	if err := s.StopLxdIfRunning(); err != nil {
@@ -507,7 +507,7 @@ func (s *tremplinServer) InitLxd() error {
 	// Let the OS close the uevent socket, we keep it around for the entirety of
 	// tremplin's lifetime.
 
-	shouldReset := s.shouldResetLxdDbBeforeLaunch()
+	shouldReset := resetDB || s.shouldResetLxdDbBeforeLaunch()
 	if shouldReset {
 		log.Print("Resetting LXD DB prior to launch")
 		err := os.RemoveAll("/mnt/stateful/lxd/database")

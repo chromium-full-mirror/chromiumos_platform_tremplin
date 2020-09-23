@@ -2094,7 +2094,7 @@ func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (
 	}
 
 	go func() {
-		if err := s.InitLxd(); err != nil {
+		if err := s.InitLxd(in.ResetLxdDb); err != nil {
 			log.Printf("Starting LXD failed: %v", err)
 			s.listenerClient.UpdateStartLxdStatus(context.Background(), &pb.StartLxdProgress{
 				Status:        pb.StartLxdProgress_FAILED,

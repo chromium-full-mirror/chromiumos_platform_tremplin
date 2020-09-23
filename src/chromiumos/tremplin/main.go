@@ -75,7 +75,7 @@ func main() {
 	}
 
 	if !features.IsStartLxdEnabled() {
-		if err = server.InitLxd(); err != nil {
+		if err = server.InitLxd(false); err != nil {
 			log.Fatal("Failed to set up LXD: ", err)
 		}
 	}
