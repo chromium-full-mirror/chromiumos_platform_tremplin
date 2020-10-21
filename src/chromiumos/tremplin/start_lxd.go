@@ -23,6 +23,7 @@ import (
 	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
 	"golang.org/x/sys/unix"
+	yaml "gopkg.in/yaml.v2"
 )
 
 const (
@@ -43,6 +44,15 @@ var validContainerDevices = []*regexp.Regexp{
 	regexp.MustCompile("^snd/.*$"),
 	regexp.MustCompile("^tty(ACM|USB)\\d+$"),
 	regexp.MustCompile("^kvm$"),
+}
+
+type nameField struct {
+	Name string
+}
+
+type backupYaml struct {
+	Container nameField
+	Volume    nameField
 }
 
 func initStoragePool(c lxd.ContainerServer) error {
@@ -461,7 +471,8 @@ func (s *tremplinServer) initialSetup() error {
 
 // shouldResetLxdDbBeforeLaunch performs a bunch of checks to decide if we go
 // ahead with wiping and recovering the LXD database. Checks for feature flag
-// being enabled, only a single penguin container. Also returns false on error.
+// being enabled, only a single penguin container, that backup.yaml has the
+// right name. Also returns false on error.
 func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
 	if !s.features.IsResetLxdOnLaunchEnabled() {
 		return false
@@ -486,7 +497,29 @@ func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
 		log.Printf("Not resetting LXD DB, container wasn't called %s", defaultContainerName)
 		return false
 	}
-	// TODO(davidmunro): Can we detect custom containers which are called penguin?
+
+	data, err := ioutil.ReadFile(fmt.Sprintf("/mnt/stateful/lxd/containers/%s/backup.yaml", defaultContainerName))
+	if err != nil {
+		log.Print("Error reading backup.yaml, not resetting since can't import without backup.yaml: ", err)
+		return false
+	}
+
+	var y backupYaml
+	err = yaml.Unmarshal(data, &y)
+	if err != nil {
+		log.Print("Error unmarshalling backup.yaml, not resetting since can't perform all safety checks: ", err)
+		return false
+	}
+
+	// Check if we'd hit https://github.com/lxc/lxd/issues/8071 if we continued,
+	// and if so, don't continue.
+	if y.Container.Name != defaultContainerName || y.Volume.Name != defaultContainerName {
+		log.Printf("Container name not the same as container or volume name in backup.yaml. "+
+			"Expected %q but got %q (container) and %q (volume). Not resetting as container is unimportable.",
+			defaultContainerName, y.Container.Name, y.Volume.Name)
+		return false
+	}
+
 	log.Printf("Resetting enabled")
 	return true
 }
