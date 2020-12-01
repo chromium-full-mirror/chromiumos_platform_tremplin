@@ -9,12 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	lxd "github.com/lxc/lxd/client"
-	"github.com/lxc/lxd/shared/api"
-	"google.golang.org/grpc"
 	"io"
 	"testing"
 	"time"
+
+	lxd "github.com/lxc/lxd/client"
+	"github.com/lxc/lxd/shared/api"
+	"google.golang.org/grpc"
 )
 
 type lxdStub struct {
@@ -290,34 +291,5 @@ func TestCancelNotRunning(t *testing.T) {
 
 	if status != pb.CancelUpgradeContainerResponse_NOT_RUNNING {
 		t.Errorf("Unexpected status, got: %v, want: %v.", status, pb.CancelUpgradeContainerResponse_NOT_RUNNING)
-	}
-}
-
-func TestCancelPkillFailed(t *testing.T) {
-	t.Skip("skipping flaky test, see https://crbug.com/1044631")
-	// Our upgrade sleeps for a very long time in the background, we don't wait for or need it to finish so it's fine.
-	// This needs to be long enough that it's still running when we cancel.
-	server, _, operation := makeStubs(0.0, 1*time.Minute, nil)
-
-	status, _ := server.startUpgradeContainer("test", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
-	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %v", status)
-	}
-
-	// Set the wait time on our stub back to 0 so cancelling doesn't take a minute.
-	operation.waitTime = 0 * time.Millisecond
-
-	// Failed to cancel.
-	operation.apiOperation.Metadata["return"] = 127.0
-	cancelStatus, _ := server.cancelUpgradeContainer("test")
-	if cancelStatus != pb.CancelUpgradeContainerResponse_FAILED {
-		t.Errorf("Unexpected status, got: %v, want: %v.", cancelStatus, pb.CancelUpgradeContainerResponse_FAILED)
-	}
-
-	// If we retry should be able to successfully cancel i.e. a failed cancel doesn't put us in a bad state.
-	operation.apiOperation.Metadata["return"] = 0.0
-	cancelStatus, _ = server.cancelUpgradeContainer("test")
-	if cancelStatus != pb.CancelUpgradeContainerResponse_CANCELLED {
-		t.Errorf("Unexpected status, got: %v, want: %v.", cancelStatus, pb.CancelUpgradeContainerResponse_CANCELLED)
 	}
 }
