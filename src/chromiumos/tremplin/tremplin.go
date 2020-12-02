@@ -1302,9 +1302,15 @@ func (s *tremplinServer) GetContainerInfo(ctx context.Context, in *pb.GetContain
 
 // SetTimezone implements tremplin.SetTimezone.
 func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequest) (*pb.SetTimezoneResponse, error) {
-	log.Printf("Received SetTimezone RPC: %s", in.TimezoneName)
-
 	response := &pb.SetTimezoneResponse{}
+	log.Printf("Received SetTimezone RPC: %s", in.TimezoneName)
+	if s.lxd == nil {
+		// LXD hasn't started yet, so nothing to do here
+		log.Print("Ignoring SetTimezone request before LXD is running")
+		response.FailureReasons = append(response.FailureReasons, "Ignoring SetTimezone request before LXD is running")
+		return response, nil
+	}
+
 	s.timezoneName = in.TimezoneName
 	for _, name := range in.ContainerNames {
 		container, _, err := s.lxd.GetContainer(name)
@@ -2006,6 +2012,11 @@ func (s *tremplinServer) CancelUpgradeContainer(ctx context.Context, in *pb.Canc
 // HostNetworkChanged implements tremplin.HostNetworkChanged.
 func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetworkChangedRequest) (*pb.HostNetworkChangedResponse, error) {
 	log.Printf("Received HostNetworkChanged RPC")
+	if s.lxd == nil {
+		// LXD hasn't started yet, so nothing to do here
+		log.Print("Ignoring HostNetworkChanged notification before LXD is running")
+		return &pb.HostNetworkChangedResponse{}, nil
+	}
 
 	containers, err := s.lxd.GetContainers()
 	if err != nil {
