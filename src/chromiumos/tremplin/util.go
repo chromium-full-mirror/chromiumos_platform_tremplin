@@ -16,12 +16,11 @@ import (
 // execCommand executes a command and returns the result.
 func execCommand(name string, args ...string) (string, error) {
 	log.Printf("executing command %v with %v args: %v", name, len(args), strings.Join(args, " "))
-	result, err := exec.Command(name, args...).CombinedOutput()
+	output, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
 		log.Printf("executing command %v failed with err: %v", name, err)
-		return "", err
 	}
-	return string(result), err
+	return string(output), err
 }
 
 // visitFiles calls the visitor for each of the files below each root.
