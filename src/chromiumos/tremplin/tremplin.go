@@ -27,6 +27,7 @@ import (
 
 	pb "chromiumos/vm_tools/tremplin_proto"
 
+	"github.com/elastic/go-libaudit"
 	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared"
 	"github.com/lxc/lxd/shared/api"
@@ -173,6 +174,8 @@ type tremplinServer struct {
 	upgradeClientUpdateInterval time.Duration
 	lxdHelper                   lxdHelper
 	features                    Features
+	ueventSocket                int
+	auditClient                 *libaudit.AuditClient
 }
 
 // execProgramAsync starts running a program in a container.

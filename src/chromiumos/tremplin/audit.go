@@ -26,6 +26,9 @@ const errAuditRuleExists = "rule exists"
 // UpdatePorts queries for listening ports in all running containers and sends
 // those ports to the host.
 func (s *tremplinServer) UpdatePorts() error {
+	if s.lxd == nil {
+		return nil
+	}
 	containers, err := s.lxd.GetContainers()
 	if err != nil {
 		return fmt.Errorf("failed to get container list: %v", err)
@@ -79,29 +82,34 @@ func (s *tremplinServer) UpdatePorts() error {
 	return nil
 }
 
-func startAuditListener(s *tremplinServer) error {
-	ac, err := libaudit.NewAuditClient(nil)
-	if err != nil {
-		return fmt.Errorf("failed to create audit client: %v", err)
+func (s *tremplinServer) startAuditListener() error {
+	if s.auditClient == nil {
+		var err error
+		s.auditClient, err = libaudit.NewAuditClient(nil)
+		if err != nil {
+			return fmt.Errorf("failed to create audit client: %v", err)
+		}
+	} else {
+		log.Print("Found an existing audit client so reusing. Did a previous launch fail?")
 	}
 
-	status, err := ac.GetStatus()
+	status, err := s.auditClient.GetStatus()
 	if err != nil {
 		return fmt.Errorf("failed to get audit status: %v", err)
 	}
 
 	if status.Enabled == 0 {
 		log.Print("Enabling kernel audit subsystem")
-		if err = ac.SetEnabled(true, libaudit.WaitForReply); err != nil {
+		if err = s.auditClient.SetEnabled(true, libaudit.WaitForReply); err != nil {
 			return fmt.Errorf("failed to enable auditing: %v", err)
 		}
 	}
 
-	if err := ac.SetPID(libaudit.WaitForReply); err != nil {
+	if err := s.auditClient.SetPID(libaudit.WaitForReply); err != nil {
 		return fmt.Errorf("failed to set tremplin as audit daemon: %v", err)
 	}
 
-	if err := ac.SetFailure(libaudit.LogOnFailure, libaudit.WaitForReply); err != nil {
+	if err := s.auditClient.SetFailure(libaudit.LogOnFailure, libaudit.WaitForReply); err != nil {
 		return fmt.Errorf("failed to set audit to log on failure: %v", err)
 	}
 
@@ -128,7 +136,7 @@ func startAuditListener(s *tremplinServer) error {
 			return fmt.Errorf("failed to compile listen rule: %v", err)
 		}
 
-		if err := ac.AddRule(compiledRule); err != nil && err.Error() != errAuditRuleExists {
+		if err := s.auditClient.AddRule(compiledRule); err != nil && err.Error() != errAuditRuleExists {
 			return fmt.Errorf("failed to add listen rule: %v", err)
 		}
 
@@ -137,7 +145,7 @@ func startAuditListener(s *tremplinServer) error {
 	go func() {
 		// Listen for audit events forever.
 		for {
-			rawMsg, err := ac.Receive(false)
+			rawMsg, err := s.auditClient.Receive(false)
 			if err != nil {
 				log.Printf("Failed to receive audit message: %v", err)
 				break

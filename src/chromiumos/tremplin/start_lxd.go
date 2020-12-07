@@ -226,12 +226,12 @@ func readUevent(ueventBytes []byte) (map[string]string, error) {
 	}
 }
 
-func ueventListen(c lxd.ContainerServer, ueventSocket int) error {
+func (s *tremplinServer) ueventListen() error {
 	log.Print("Listening for device updates via uevent")
 
 	for {
 		ueventBytes := make([]byte, ueventBufferSize)
-		recvLen, _, err := syscall.Recvfrom(ueventSocket, ueventBytes, 0)
+		recvLen, _, err := syscall.Recvfrom(s.ueventSocket, ueventBytes, 0)
 		if err != nil {
 			log.Fatal("Failed to read uevent: ", err)
 		}
@@ -261,7 +261,7 @@ func ueventListen(c lxd.ContainerServer, ueventSocket int) error {
 			continue
 		}
 
-		profile, etag, err := c.GetProfile(defaultProfileName)
+		profile, etag, err := s.lxd.GetProfile(defaultProfileName)
 		if err != nil {
 			log.Print("GetProfile failed: ", err)
 			continue
@@ -275,7 +275,7 @@ func ueventListen(c lxd.ContainerServer, ueventSocket int) error {
 			removeDevice(devName, profilePut.Devices)
 		}
 
-		err = c.UpdateProfile(defaultProfileName, profilePut, etag)
+		err = s.lxd.UpdateProfile(defaultProfileName, profilePut, etag)
 		if err != nil {
 			log.Print("UpdateProfile failed: ", err)
 		}
@@ -412,13 +412,12 @@ func updateRequiredDevices(c lxd.ContainerServer) error {
 	return nil
 }
 
-func (s *tremplinServer) initialSetup() error {
+func (s *tremplinServer) initialSetup(c lxd.ContainerServer) error {
 	// Create the milestone file to bind-mount into containers.
 	// This must be done before initializing the profile as LXD now checks
 	// for the existence of storage volumes when the profile is set rather
 	// then when the container is started.
 	milestone := s.milestone
-	c := s.lxd
 
 	if err := ioutil.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
 		return fmt.Errorf("could not write milestone file: %v", err)
@@ -533,9 +532,14 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 		log.Fatal("LXD is already running, but failed to stop: ", err)
 	}
 
-	ueventSocket, err := createUeventSocket()
-	if err != nil {
-		return fmt.Errorf("Failed to open uevent netlink connection: %w", err)
+	if s.ueventSocket == -1 {
+		var err error
+		s.ueventSocket, err = createUeventSocket()
+		if err != nil {
+			return fmt.Errorf("Failed to open uevent netlink connection: %w", err)
+		}
+	} else {
+		log.Print("Found an existing uevent socket so reusing. Did a previous launch fail?")
 	}
 	// Let the OS close the uevent socket, we keep it around for the entirety of
 	// tremplin's lifetime.
@@ -568,18 +572,18 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 			return fmt.Errorf("Failed to lxd import container: %w", err)
 		}
 	}
-	s.lxd = c
 
-	if err := s.initialSetup(); err != nil {
+	if err := s.initialSetup(c); err != nil {
 		return fmt.Errorf("Failed initialSetup: %w", err)
 	}
 
-	if err := startAuditListener(s); err != nil {
+	if err := s.startAuditListener(); err != nil {
 		return fmt.Errorf("Failed to start audit listener: %w", err)
 	}
 
 	// Listen for device updates.
-	go ueventListen(s.lxd, ueventSocket)
+	s.lxd = c
+	go s.ueventListen()
 	return nil
 }
 

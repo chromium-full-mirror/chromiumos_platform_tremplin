@@ -72,6 +72,8 @@ func main() {
 		upgradeStatus:               *NewTransactionMap(),
 		upgradeClientUpdateInterval: 5 * time.Second,
 		features:                    features,
+		ueventSocket:                -1,
+		auditClient:                 nil,
 	}
 
 	if !features.IsStartLxdEnabled() {
