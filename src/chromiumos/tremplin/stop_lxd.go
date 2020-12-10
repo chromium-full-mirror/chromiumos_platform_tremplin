@@ -61,34 +61,66 @@ func findLxdProcesses() []int {
 	return pids
 }
 
+// waitForLxdToExit blocks until there are running existing LXD processes,
+// waiting up to the specified timeout. Returns nil if LXD was observed to exit,
+// or a non-nil error if LXD is still running after the timeout or another error
+// occurred.
+func waitForLxdToExit(timeout time.Duration) error {
+	const interval = 500 * time.Millisecond
+	end := time.Now().Add(timeout)
+
+	for time.Now().Before(end) {
+		pids := findLxdProcesses()
+		if len(pids) == 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("Timed out waiting for LXD to exit")
+}
+
 // StopLxdIfRunning searches for any running LXD processes and
 // terminates them. This is intended to clean up any LXD processes
 // that might hang around if tremplin crashes and restarts. This is
 // best-effort, since it's difficult to reliably find and stop
 // processes with the interface we have.
 func (s *tremplinServer) StopLxdIfRunning() error {
-	// Bail out early in the usual case that we don't need to do anything.
-	pids := findLxdProcesses()
-	if len(pids) == 0 {
+	s.lxdHelper.StopLxd(true)
+	s.lxd = nil
+
+	if err := waitForLxdToExit(2 * time.Second); err == nil {
+		// All the LXD instances have stopped.
 		return nil
 	}
 
 	// Give LXD a chance to exit cleanly, and then SIGKILL it.
 	// This will leave the containers running and LXD will
 	// reconnect to them when it restarts.
+	pids := findLxdProcesses()
 	for _, pid := range pids {
 		proc, _ := os.FindProcess(pid)
 		if err := proc.Signal(syscall.SIGTERM); err != nil {
-			return fmt.Errorf("Failed to request LXD shutdown: %w", err)
+			// If the process already exited at any point between listing
+			// processes and here the signal will fail with a private error
+			// (stopping us from using errors.Is to check). But we try again
+			// harder later so just ignore errors.
+			fmt.Print("Failed to request LXD shutdown: ", err)
 		}
 	}
-	time.Sleep(5 * time.Second)
-	for _, pid := range findLxdProcesses() {
+	if err := waitForLxdToExit(5 * time.Second); err == nil {
+		return nil
+	}
+	for _, pid := range pids {
 		proc, _ := os.FindProcess(pid)
 		if err := proc.Kill(); err != nil {
-			return fmt.Errorf("Failed to kill LXD: %w", err)
+			// If the process already exited at any point between listing
+			// processes and here (including in response to the previous
+			// SIGTERM) the signal will fail with a private error (stopping us
+			// from using errors.Is to test for it). But in practice the ways
+			// kill fails (since we're running as root) are to do with the
+			// process not existing, so either way we're happy.
+			fmt.Print("Failed to force LXD shutdown: ", err)
 		}
 	}
-
-	return nil
+	s.lxd = nil
+	return waitForLxdToExit(5 * time.Second)
 }

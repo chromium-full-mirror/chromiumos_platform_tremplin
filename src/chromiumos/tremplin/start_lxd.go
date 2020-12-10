@@ -36,6 +36,8 @@ const (
 	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
 	milestonePath          = "/run/cros_milestone"    // path to the file containing the Chrome OS milestone
 	ueventBufferSize       = 4096                     // largest allowed uevent message size
+	lxdDatabasePath        = "/mnt/stateful/lxd/database"
+	lxdDatabaseBackupPath  = "/mnt/stateful/lxd/database.old"
 )
 
 // Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
@@ -529,7 +531,7 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 	// Stop LXD if it's already running (e.g. may be left over from a previous
 	// failed launch).
 	if err := s.StopLxdIfRunning(); err != nil {
-		log.Fatal("LXD is already running, but failed to stop: ", err)
+		return fmt.Errorf("LXD is already running, but failed to stop: %w", err)
 	}
 
 	if s.ueventSocket == -1 {
@@ -547,14 +549,36 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 	shouldReset := resetDB || s.shouldResetLxdDbBeforeLaunch()
 	if shouldReset {
 		log.Print("Resetting LXD DB prior to launch")
-		err := os.RemoveAll("/mnt/stateful/lxd/database")
-		if err != nil {
-			return fmt.Errorf("Unable to clear the LXD DB: %w", err)
+		// Move to a backup location.
+		_, err := os.Stat(lxdDatabasePath)
+		if os.IsNotExist(err) {
+			// Existing database folder doesn't exist, nothing to move away.
+		} else if err != nil {
+			// Some other error happened, no idea if the database folder exists
+			// or not so fail.
+			return fmt.Errorf("Unable to check if LXD DB exists: %w", err)
+		} else {
+			// Move the database
+			// Delete any old copies. We ignore errors since either it's fine
+			// e.g. backup doesn't exist, or it'll cause the rename to fail.
+			os.RemoveAll(lxdDatabaseBackupPath)
+			err = os.Rename(lxdDatabasePath, lxdDatabaseBackupPath)
+			if err != nil {
+				return fmt.Errorf("Unable to clear the LXD DB: %w", err)
+			}
 		}
 	}
 
 	c, err := s.lxdHelper.LaunchLxd()
 	if err != nil {
+		// Unable to launch LXD.
+		if shouldReset {
+			// Restore the old database.
+			renameErr := os.Rename(lxdDatabaseBackupPath, lxdDatabasePath)
+			if renameErr != nil {
+				log.Print("Unable to restore the old LXD DB: ", renameErr)
+			}
+		}
 		return fmt.Errorf("Failed to connect to LXD daemon: %w", err)
 	}
 	if shouldReset {
@@ -564,12 +588,32 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 		// penguin (default name).
 		err := recoverContainer(defaultContainerName)
 		if err != nil {
-			// Uh oh. We deleted their existing state (e.g. list of containers)
-			// but weren't able to recover it. The good news is we won't
-			// accidentally overwrite it, initStoragePool, etc will fail since
-			// the storage pool, etc, already exists. The bad news is we can't
-			// start their container. Fail, and we'll try again next time.
-			return fmt.Errorf("Failed to lxd import container: %w", err)
+			// Our preferred approach failed, let's try loading from the old
+			// database as a fallback. So stop LXD, move the database back,
+			// restart
+			log.Print("Unable to import container: ", err)
+			log.Print("Attempting fallback method of starting LXD")
+			importErr := fmt.Errorf("Failed to lxd import container: %w", err)
+			if err := s.StopLxdIfRunning(); err != nil {
+				log.Print("Failed to stop LXD: ", err)
+				return importErr
+			}
+			err = os.RemoveAll(lxdDatabasePath)
+			if err != nil {
+				log.Print("Unable to delete the empty LXD DB: ", err)
+				return importErr
+			}
+			err = os.Rename(lxdDatabaseBackupPath, lxdDatabasePath)
+			if err != nil {
+				log.Print("Unable to restore the old LXD DB: ", err)
+				return importErr
+			}
+			c, err = s.lxdHelper.LaunchLxd()
+			if err != nil {
+				log.Print("Failed to connect to LXD daemon: ", err)
+				return importErr
+			}
+			log.Print("LXD started via fallback method")
 		}
 	}
 

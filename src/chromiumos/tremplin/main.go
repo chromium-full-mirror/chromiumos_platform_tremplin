@@ -141,5 +141,5 @@ func main() {
 	}
 
 	// Now signal LXD to shut down.
-	server.lxdHelper.StopLxd()
+	server.lxdHelper.StopLxd(false)
 }

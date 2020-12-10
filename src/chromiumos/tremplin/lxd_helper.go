@@ -28,7 +28,6 @@ const (
 var lxdCmd = []string{"/usr/sbin/lxd", "--group", "lxd", "--syslog"}
 
 type lxdHelper struct {
-	lxd            lxd.ContainerServer
 	process        *os.Process
 	mutex          sync.Mutex
 	shutdownSignal chan os.Signal
@@ -163,44 +162,48 @@ func lxdWaitready() (lxd.ContainerServer, error) {
 	return nil, lastErr
 }
 
-// LaunchLxd with launch LXD and return a connection to the server, or an error
-// if launching failed. Will respawn LXD if it ever exits.
+// LaunchLxd will return a connection to the LXD server, launching it first if
+// required.
 func (l *lxdHelper) LaunchLxd() (lxd.ContainerServer, error) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	if l.shutdownSignal == nil {
 		l.shutdownSignal = make(chan os.Signal, 1)
-
-		// Launch LXD, we allow 10 failures per 30 seconds (copied from maitre'd)
+		// Launch LXD, we allow 10 failures per 30 seconds (copied from maitred)
 		// before giving up.
 		go runWithRetry(l.runLxd, l.shutdownSignal, 30*time.Second, 10)
 	}
-	if l.lxd == nil {
-		// Wait for LXD to be ready.
-		c, err := lxdWaitready()
-		if err != nil {
-			// Timed out
-			return nil, fmt.Errorf("Timed out waiting for LXD to start. Last error was: %w", err)
-		}
-		log.Print("LXD running and ready")
-		l.lxd = c
+	// Wait for LXD to be ready.
+	c, err := lxdWaitready()
+	if err != nil {
+		// Timed out
+		return nil, fmt.Errorf("Timed out waiting for LXD to start. Last error was: %w", err)
 	}
-	return l.lxd, nil
+	log.Print("LXD running and ready")
+	return c, nil
 }
 
-// StopLxd signals LXD to shut down with the provided signal and stops
-// respawning it automatically. Returns as soon as the signal is sent instead of
-// blocking on LXD actually shutting down.
-func (l *lxdHelper) StopLxd() error {
-	signal := syscall.SIGPWR
+// StopLxd signals LXD to shut down and stops this helper from restarting it.
+// If keepContainersAlive is false it will gracefully shut down LXD and all its
+// containers. If true it'll less gracefully terminate LXD while keeping any
+// active containers still running. Returns as soon as the signal is sent
+// instead of blocking on LXD actually shutting down.
+func (l *lxdHelper) StopLxd(keepContainersAlive bool) error {
+	var signal syscall.Signal
+	if keepContainersAlive {
+		signal = syscall.SIGTERM
+	} else {
+		signal = syscall.SIGPWR
+	}
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	log.Print("Telling LXD to shut down")
-	if l.shutdownSignal != nil {
+	if l.shutdownSignal == nil {
 		// This can happen if we shut down before we started LXD.
 		log.Print("No channel to signal LXD on (is it running?). Nothing to do.")
 		return nil
 	}
 	l.shutdownSignal <- signal
+	l.shutdownSignal = nil
 	return l.process.Signal(signal)
 }
