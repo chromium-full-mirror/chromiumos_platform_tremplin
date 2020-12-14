@@ -112,29 +112,31 @@ func main() {
 	log.Print("tremplin shutting down")
 	server.grpcServer.GracefulStop()
 
-	containers, err := server.lxd.GetContainers()
-	if err != nil {
-		log.Fatal("Failed to get containers list for shutdown: ", err)
-	}
-
-	wg := &sync.WaitGroup{}
-	for _, container := range containers {
-		if container.StatusCode != api.Running {
-			continue
+	if server.lxd != nil {
+		containers, err := server.lxd.GetContainers()
+		if err != nil {
+			log.Fatal("Failed to get containers list for shutdown: ", err)
 		}
-		wg.Add(1)
-		// Start all poweroffs in parallel - no reason to wait.
-		go func(name string) {
-			defer wg.Done()
-			_, _, _, err := server.execProgram(name, []string{"poweroff"})
-			if err != nil {
-				log.Printf("Failed to run poweroff in container %s: %v", name, err)
+
+		wg := &sync.WaitGroup{}
+		for _, container := range containers {
+			if container.StatusCode != api.Running {
+				continue
 			}
-		}(container.Name)
+			wg.Add(1)
+			// Start all poweroffs in parallel - no reason to wait.
+			go func(name string) {
+				defer wg.Done()
+				_, _, _, err := server.execProgram(name, []string{"poweroff"})
+				if err != nil {
+					log.Printf("Failed to run poweroff in container %s: %v", name, err)
+				}
+			}(container.Name)
+		}
+		// Wait for poweroff commands to be run. Note that this doesn't mean the
+		// containers are fully shut down yet.
+		wg.Wait()
 	}
-	// Wait for poweroff commands to be run. Note that this doesn't mean the
-	// containers are fully shut down yet.
-	wg.Wait()
 
 	// Now signal LXD to shut down.
 	server.lxdHelper.StopLxd()
