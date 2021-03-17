@@ -64,27 +64,3 @@ func TestUnknownFlagsAllowed(t *testing.T) {
 		t.Fatalf("Expected: \"%s\" got: \"%s\"", expected, got)
 	}
 }
-
-func TestStartLxd(t *testing.T) {
-	var features Features
-	feature := "START_LXD"
-	fs := flag.NewFlagSet("test", flag.PanicOnError)
-	fs.Var(&features, "feature", "features to enable")
-	fs.Parse([]string{"-feature", feature})
-
-	if !features.IsStartLxdEnabled() {
-		t.Fatalf("Expected %s feature to be set, but it wasn't", feature)
-	}
-}
-
-func TestResetLxdOnLaunch(t *testing.T) {
-	var features Features
-	feature := "RESET_LXD_ON_LAUNCH"
-	fs := flag.NewFlagSet("test", flag.PanicOnError)
-	fs.Var(&features, "feature", "features to enable")
-	fs.Parse([]string{"-feature", feature})
-
-	if !features.IsResetLxdOnLaunchEnabled() {
-		t.Fatalf("Expected %s feature to be set, but it wasn't", feature)
-	}
-}

@@ -2093,13 +2093,6 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 func (s *tremplinServer) StartLxd(ctx context.Context, in *pb.StartLxdRequest) (*pb.StartLxdResponse, error) {
 	log.Print("Received StartLxd RPC")
 
-	if !s.features.IsStartLxdEnabled() {
-		// We start LXD as we launch Tremplin without START_LXD set, so it'll be running by this point.
-		return &pb.StartLxdResponse{
-			Status: pb.StartLxdResponse_ALREADY_RUNNING,
-		}, nil
-	}
-
 	if s.lxd != nil {
 		log.Print("LXD already running")
 		return &pb.StartLxdResponse{

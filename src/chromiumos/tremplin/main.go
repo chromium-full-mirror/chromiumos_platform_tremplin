@@ -76,12 +76,6 @@ func main() {
 		auditClient:                 nil,
 	}
 
-	if !features.IsStartLxdEnabled() {
-		if err = server.InitLxd(false); err != nil {
-			log.Fatal("Failed to set up LXD: ", err)
-		}
-	}
-
 	pb.RegisterTremplinServer(server.grpcServer, &server)
 	reflection.Register(server.grpcServer)
 

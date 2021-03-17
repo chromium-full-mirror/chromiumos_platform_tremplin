@@ -51,14 +51,3 @@ func (v *Features) Set(s string) error {
 func (v *Features) IsUsedByTestsEnabled() bool {
 	return v.features != nil && v.features[pb.StartTerminaRequest_USED_BY_TESTS]
 }
-
-// IsStartLxdEnabled reports whether the START_LXD feature flag is set.
-func (v *Features) IsStartLxdEnabled() bool {
-	return v.features != nil && v.features[pb.StartTerminaRequest_START_LXD]
-}
-
-// IsResetLxdOnLaunchEnabled reports whether the RESET_LXD_ON_LAUNCH feature
-// flag is set.
-func (v *Features) IsResetLxdOnLaunchEnabled() bool {
-	return v.features != nil && v.features[pb.StartTerminaRequest_RESET_LXD_ON_LAUNCH]
-}

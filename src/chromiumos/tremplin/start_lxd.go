@@ -475,9 +475,6 @@ func (s *tremplinServer) initialSetup(c lxd.ContainerServer) error {
 // being enabled, only a single penguin container, that backup.yaml has the
 // right name. Also returns false on error.
 func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
-	if !s.features.IsResetLxdOnLaunchEnabled() {
-		return false
-	}
 	f, err := os.Open("/mnt/stateful/lxd/containers")
 	if err != nil {
 		log.Print("Error opening container dir to list files: ", err)
