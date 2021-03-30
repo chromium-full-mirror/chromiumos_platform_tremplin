@@ -1188,7 +1188,8 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	for _, user := range users {
 		if err := pd.EnsureUserExists(user.name, user.uid, user.loginEnabled); err != nil {
 			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to create username=%v, uid=%v, loginEnabled=%v: %v", user.name, user.uid, user.loginEnabled, err)
+			response.FailureReason = fmt.Sprintf("failed to create user, uid=%v, loginEnabled=%v: %v", user.uid, user.loginEnabled, err)
+			strings.ReplaceAll(response.FailureReason, user.name, "$USERNAME")
 			return response, nil
 		}
 	}
