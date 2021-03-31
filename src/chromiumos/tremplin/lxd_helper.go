@@ -39,14 +39,18 @@ func runWithRetry(cmd func() error, shutdownSignal chan os.Signal, failureWindow
 	var failures []time.Time
 	for {
 		waitReadySucceeded := make(chan bool)
+		ctx, cancel := context.WithCancel(context.TODO())
 		go func() {
-			_, err := lxdWaitready()
+			_, err := lxdWaitready(ctx)
 			if err == nil {
 				waitReadySucceeded <- true
+			} else {
+				waitReadySucceeded <- false
 			}
 		}()
 
 		err := cmd()
+		cancel()
 		// If we reach here LXD has stopped running or never started.
 
 		// Process shutdownSignal first so we never ignore a
@@ -62,11 +66,11 @@ func runWithRetry(cmd func() error, shutdownSignal chan os.Signal, failureWindow
 		// Check if the waitready operation succeeded. If so,
 		// that means LXD started up and then failed, so
 		// indicate that to cicerone.
-		select {
-		case <-waitReadySucceeded:
+		b := <-waitReadySucceeded
+		if b {
 			log.Print("LXD died unexpectedly with error: ", err)
 			signalLxdFailure()
-		default:
+		} else {
 			log.Print("LXD failed to start with error: ", err)
 		}
 
@@ -126,7 +130,7 @@ func (l *lxdHelper) runLxd() error {
 }
 
 // lxdWaitready waits for LXD to be ready to handle requests.
-func lxdWaitready() (lxd.ContainerServer, error) {
+func lxdWaitready(ctx context.Context) (lxd.ContainerServer, error) {
 	var lastErr error
 	const lxdReadyTimeout = 2 * time.Minute
 	const lxdInterval = 500 * time.Millisecond
@@ -134,11 +138,17 @@ func lxdWaitready() (lxd.ContainerServer, error) {
 	attempt := 0
 
 	for time.Now().Before(start.Add(lxdReadyTimeout)) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		attempt++
 		// Wait until there's a socket with something listening at the other end.
 		c, err := lxd.ConnectLXDUnix("", nil)
 		if err != nil {
-			if attempt%10 == 0 {
+			if attempt%20 == 0 {
 				log.Print("ConnectLXDUnix not ready yet, retrying. Error was: ", err)
 			}
 			time.Sleep(lxdInterval)
@@ -148,7 +158,7 @@ func lxdWaitready() (lxd.ContainerServer, error) {
 		// Wait until the server says it's ready.
 		_, _, err = c.RawQuery("GET", "/internal/ready", nil, "")
 		if err != nil {
-			if attempt%10 == 0 {
+			if attempt%20 == 0 {
 				log.Print("internal/ready not ready yet, retrying. Error was: ", err)
 			}
 			time.Sleep(lxdInterval)
@@ -174,7 +184,7 @@ func (l *lxdHelper) LaunchLxd() (lxd.ContainerServer, error) {
 		go runWithRetry(l.runLxd, l.shutdownSignal, 30*time.Second, 10)
 	}
 	// Wait for LXD to be ready.
-	c, err := lxdWaitready()
+	c, err := lxdWaitready(context.TODO())
 	if err != nil {
 		// Timed out
 		return nil, fmt.Errorf("Timed out waiting for LXD to start. Last error was: %w", err)
