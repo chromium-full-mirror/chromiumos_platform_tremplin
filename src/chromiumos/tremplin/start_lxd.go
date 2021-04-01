@@ -645,7 +645,7 @@ func recoverContainer(name string) error {
 		}
 		f.Close()
 	}
-	out, err := execCommand("/usr/sbin/lxd", "import", name)
+	out, err := execCommand("/usr/sbin/lxd", "import", "--force", name)
 	if err != nil {
 		return fmt.Errorf("Error importing container. Stdout/err: %s. Error: %w", out, err)
 	}
