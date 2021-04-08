@@ -25,7 +25,7 @@ const (
 	crashHostPort = "7779"
 )
 
-var lxdCmd = []string{"/usr/sbin/lxd", "--group", "lxd", "--syslog"}
+var lxdCmd = []string{"lxd", "--group", "lxd", "--syslog"}
 
 type lxdHelper struct {
 	process        *os.Process

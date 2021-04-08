@@ -17,7 +17,8 @@ import (
 // findLxdProcesses searches for any running LXD daemons by looking at
 // the executable being run, which is symlinked at /proc/PID/exe, and
 // the commandline at /proc/PID/cmdline. For LXD this will be
-// /usr/sbin/lxd and {"/usr/sbin/lxd", "--group", "lxd", "--syslog"}.
+// /usr/sbin/lxd or /opt/google/lxd-next/usr/bin/lxd and
+// {"lxd", "--group", "lxd", "--syslog"}.
 func findLxdProcesses() []int {
 	fileinfos, _ := ioutil.ReadDir("/proc")
 
@@ -45,7 +46,7 @@ func findLxdProcesses() []int {
 			// Readlink can return an error.
 			continue
 		}
-		if dest != "/usr/sbin/lxd" {
+		if dest != "/usr/sbin/lxd" && dest != "/opt/google/lxd-next/usr/bin/lxd" {
 			continue
 		}
 		procCmdline, err := ioutil.ReadFile("/proc/" + file.Name() + "/cmdline")
