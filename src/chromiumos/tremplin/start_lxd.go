@@ -37,7 +37,8 @@ const (
 	milestonePath          = "/run/cros_milestone"    // path to the file containing the Chrome OS milestone
 	ueventBufferSize       = 4096                     // largest allowed uevent message size
 	lxdDatabasePath        = "/mnt/stateful/lxd/database"
-	lxdDatabaseBackupPath  = "/mnt/stateful/lxd/database.old"
+	lxdNetworkPath         = "/mnt/stateful/lxd/networks"
+	lxdBackupPath          = ".old"
 )
 
 // Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
@@ -522,6 +523,41 @@ func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
 	return true
 }
 
+func clearLXDDirectory(path string) error {
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		// Existing folder doesn't exist, nothing to move away.
+	} else if err != nil {
+		// Some other error happened, no idea if the folder
+		// exists or not so fail.
+		return fmt.Errorf("Unable to check if path %q exists: %w", path, err)
+	} else {
+		// Move the folder
+		// Delete any old copies. We ignore errors since either it's fine
+		// e.g. backup doesn't exist, or it'll cause the rename to fail.
+		os.RemoveAll(path + lxdBackupPath)
+		err = os.Rename(path, path+lxdBackupPath)
+		if err != nil {
+			return fmt.Errorf("Unable to clear path %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func restoreLXDDirectory(path string) error {
+	err := os.RemoveAll(path)
+	if os.IsNotExist(err) {
+		// Folder to replace doesn't exist, nothing to do.
+	} else if err != nil {
+		return fmt.Errorf("Unable to delete the empty directory %q: %w", path, err)
+	}
+	err = os.Rename(path+lxdBackupPath, path)
+	if err != nil {
+		return fmt.Errorf("Unable to restore the old path %q: %w", path, err)
+	}
+	return nil
+}
+
 // InitLXD sets everything up for LXD, launches it, and performs post-launch
 // config such that LXD is ready for use.
 func (s *tremplinServer) InitLxd(resetDB bool) error {
@@ -547,22 +583,13 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 	if shouldReset {
 		log.Print("Resetting LXD DB prior to launch")
 		// Move to a backup location.
-		_, err := os.Stat(lxdDatabasePath)
-		if os.IsNotExist(err) {
-			// Existing database folder doesn't exist, nothing to move away.
-		} else if err != nil {
-			// Some other error happened, no idea if the database folder exists
-			// or not so fail.
-			return fmt.Errorf("Unable to check if LXD DB exists: %w", err)
-		} else {
-			// Move the database
-			// Delete any old copies. We ignore errors since either it's fine
-			// e.g. backup doesn't exist, or it'll cause the rename to fail.
-			os.RemoveAll(lxdDatabaseBackupPath)
-			err = os.Rename(lxdDatabasePath, lxdDatabaseBackupPath)
-			if err != nil {
-				return fmt.Errorf("Unable to clear the LXD DB: %w", err)
-			}
+		if err := clearLXDDirectory(lxdDatabasePath); err != nil {
+			return err
+		}
+		// Clear the networks path. This is all transient
+		// information, but LXD can choke on it anyway.
+		if err := clearLXDDirectory(lxdNetworkPath); err != nil {
+			return err
 		}
 	}
 
@@ -571,9 +598,11 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 		// Unable to launch LXD.
 		if shouldReset {
 			// Restore the old database.
-			renameErr := os.Rename(lxdDatabaseBackupPath, lxdDatabasePath)
-			if renameErr != nil {
-				log.Print("Unable to restore the old LXD DB: ", renameErr)
+			if err := restoreLXDDirectory(lxdDatabasePath); err != nil {
+				log.Print(err)
+			}
+			if err := restoreLXDDirectory(lxdNetworkPath); err != nil {
+				log.Print(err)
 			}
 		}
 		return fmt.Errorf("Failed to connect to LXD daemon: %w", err)
@@ -595,14 +624,12 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 				log.Print("Failed to stop LXD: ", err)
 				return importErr
 			}
-			err = os.RemoveAll(lxdDatabasePath)
-			if err != nil {
-				log.Print("Unable to delete the empty LXD DB: ", err)
+			if err := restoreLXDDirectory(lxdDatabasePath); err != nil {
+				log.Print(err)
 				return importErr
 			}
-			err = os.Rename(lxdDatabaseBackupPath, lxdDatabasePath)
-			if err != nil {
-				log.Print("Unable to restore the old LXD DB: ", err)
+			if err := restoreLXDDirectory(lxdNetworkPath); err != nil {
+				log.Print(err)
 				return importErr
 			}
 			c, err = s.lxdHelper.LaunchLxd()
