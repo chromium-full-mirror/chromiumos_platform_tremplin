@@ -16,7 +16,7 @@ import (
 
 	"chromiumos/tremplin/shadow"
 
-	"github.com/lxc/lxd/client"
+	lxd "github.com/lxc/lxd/client"
 )
 
 const (
@@ -338,8 +338,6 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 		Expire:     nil,
 		Reserved:   "",
 	})
-
-	pd.EnsureGroupExists(username, uid)
 
 	return nil
 }

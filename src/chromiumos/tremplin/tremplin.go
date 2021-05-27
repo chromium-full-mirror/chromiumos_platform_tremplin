@@ -1192,6 +1192,7 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 			strings.ReplaceAll(response.FailureReason, user.name, "$USERNAME")
 			return response, nil
 		}
+		pd.EnsureGroupExists(user.name, user.uid)
 	}
 
 	groups := []struct {
