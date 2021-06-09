@@ -1162,7 +1162,7 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 
 	pd, err := NewPasswdDatabase(s.lxd, in.ContainerName)
 	if err != nil {
-		response.Status = pb.SetUpUserResponse_FAILED
+		response.Status = pb.SetUpUserResponse_UNKNOWN
 		response.FailureReason = fmt.Sprintf("failed to get container passwd db: %v", err)
 		return response, nil
 	}

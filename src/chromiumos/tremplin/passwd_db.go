@@ -88,6 +88,22 @@ func NewPasswdDatabase(lxd containerFileServer, containerName string) (*PasswdDa
 		}
 	}
 
+	// Per crbug/1216305 we might not have successfully loaded our database,
+	// even though there weren't any errors. Do a quick check to see if it's
+	// obviously wrong.
+	found := false
+	for i := 0; i < len(pd.passwd.Entries); i++ {
+		entry := pd.passwd.Entries[i]
+		if entry.Name == "root" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		// We didn't find the entries we expected, assume something went wrong.
+		return nil, fmt.Errorf("Loaded /etc/passwd is missing expected entries. You might be hitting crbug/1216305")
+	}
+
 	return pd, nil
 }
 
