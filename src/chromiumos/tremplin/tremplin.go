@@ -493,11 +493,14 @@ func getBindMounts(containerName string, token string, hostKey string, container
 func (s *tremplinServer) startContainer(container *api.Container, etag string, in *pb.StartContainerRequest, remap bool) {
 	req := &pb.ContainerStartProgress{
 		ContainerName: container.Name,
+		Status:        pb.ContainerStartProgress_STARTING,
 	}
 
 	// The host must be informed of the final outcome, so ensure it's updated
 	// on every exit path.
+	done := make(chan error)
 	defer func() {
+		done <- nil
 		if req == nil {
 			return
 		}
@@ -505,6 +508,25 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		if err != nil {
 			log.Printf("Could not update start status on host: %v", err)
 			return
+		}
+	}()
+
+	// Send heartbeats every so often so Chrome knows we're still alive.
+	// Our heartbeat and finish message could race but that's fine, Chrome
+	// needs to handle that case anyway (it ignores messages it's not
+	// ready for).
+	ticker := time.NewTicker(time.Second * 30)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				if req != nil {
+					s.listenerClient.UpdateStartStatus(context.Background(), req)
+				}
+			case <-done:
+				ticker.Stop()
+				return
+			}
 		}
 	}()
 
