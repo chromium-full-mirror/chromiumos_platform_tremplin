@@ -8,10 +8,11 @@ import (
 	pb "chromiumos/vm_tools/tremplin_proto"
 	"context"
 	"fmt"
-	lxd "github.com/lxc/lxd/client"
 	"log"
 	"strings"
 	"time"
+
+	lxd "github.com/lxc/lxd/client"
 )
 
 const upgradeScriptPath = "/opt/google/cros-containers/bin/upgrade_container"
@@ -31,18 +32,42 @@ func (s *tremplinServer) shutDownContainer(containerName string) error {
 }
 
 // startUpgradeContainer launches an async container upgrade job.
-func (s *tremplinServer) startUpgradeContainer(containerName string, sourceVersion, targetVersion pb.UpgradeContainerRequest_Version) (pb.UpgradeContainerResponse_Status, string) {
-	if sourceVersion != pb.UpgradeContainerRequest_DEBIAN_STRETCH ||
-		targetVersion != pb.UpgradeContainerRequest_DEBIAN_BUSTER {
-		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Upgrade from %s to %s not supported", sourceVersion, targetVersion)
+func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersion pb.UpgradeContainerRequest_Version) (pb.UpgradeContainerResponse_Status, string) {
+	if targetVersion != pb.UpgradeContainerRequest_DEBIAN_BUSTER &&
+		targetVersion != pb.UpgradeContainerRequest_DEBIAN_BULLSEYE {
+		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Upgrade to %s not supported", targetVersion)
 	}
 
 	if ok := s.upgradeStatus.StartTransaction(containerName); !ok {
 		return pb.UpgradeContainerResponse_ALREADY_RUNNING, fmt.Sprintf("Upgrade already in progress on %s", containerName)
 	}
 
+	osRelease, err := getGuestOSRelease(s.lxd, containerName)
+	if err != nil {
+		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Failed to read /etc/os-release: %v", err)
+	}
+
+	sourceVersionString := fmt.Sprintf("DEBIAN_%s", strings.ToUpper(osRelease.versionCodename))
+	sourceVersion, ok := pb.UpgradeContainerRequest_Version_value[sourceVersionString]
+	if !ok || osRelease.id != "debian" {
+		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Container has unknown version %v", osRelease)
+	}
+	sourceVersionEnum := pb.UpgradeContainerRequest_Version(sourceVersion)
+
+	if sourceVersionEnum > targetVersion {
+		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Container appears to have version %q, which is more recent then target version %q", sourceVersionEnum.String(), targetVersion.String())
+	}
+
 	var ioSink = &stdioSink{}
 	execArgs := []string{upgradeScriptPath}
+	for i := sourceVersionEnum + 1; i <= targetVersion; i++ {
+		execArgs = append(execArgs, i.String())
+	}
+	// If we are retrying an incomplete upgrade it might look like
+	// an upgrade to the same version. In that case we still want
+	// to call the upgrade script with no arguments so it can
+	// finish any incomplete upgrades.
+
 	op, err := s.execProgramAsync(containerName, execArgs, ioSink, ioSink)
 
 	if err != nil {

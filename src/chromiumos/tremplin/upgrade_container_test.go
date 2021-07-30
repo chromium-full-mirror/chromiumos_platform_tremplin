@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +24,8 @@ type lxdStub struct {
 	lxd.ContainerServer
 	operation *operationStub
 	execError error
+	osRelease string
+	lastExec  *api.ContainerExecPost
 }
 
 type operationStub struct {
@@ -37,14 +41,21 @@ type listenerStub struct {
 	validator func(pb.UpgradeContainerProgress)
 }
 
-func (s lxdStub) ExecContainer(containerName string, exec api.ContainerExecPost, args *lxd.ContainerExecArgs) (lxd.Operation, error) {
+func (s *lxdStub) ExecContainer(containerName string, exec api.ContainerExecPost, args *lxd.ContainerExecArgs) (lxd.Operation, error) {
 	s.operation.out = args.Stdout
+	s.lastExec = &exec
 	args.Stdout.Write([]byte("In-progress message\n"))
 	return s.operation, s.execError
 }
 
-func (s lxdStub) UpdateContainerState(containerName string, statePut api.ContainerStatePut, etag string) (lxd.Operation, error) {
+func (s *lxdStub) UpdateContainerState(containerName string, statePut api.ContainerStatePut, etag string) (lxd.Operation, error) {
 	return s.operation, s.execError
+}
+
+func (s *lxdStub) GetContainerFile(containerName, path string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
+	reader := ioutil.NopCloser(strings.NewReader(s.osRelease))
+	resp := lxd.ContainerFileResponse{}
+	return reader, &resp, nil
 }
 
 func (s operationStub) Wait() (err error) {
@@ -68,6 +79,10 @@ func (s listenerStub) ContainerShutdown(ctx context.Context, in *pb.ContainerShu
 	return &pb.EmptyMessage{}, nil
 }
 
+func makeOsRelease(codename string) string {
+	return fmt.Sprintf("ID=debian\nVERSION_CODENAME=%s", codename)
+}
+
 func makeStubs(returnCode float64, waitTime time.Duration, validator func(pb.UpgradeContainerProgress)) (*tremplinServer, *lxdStub, *operationStub) {
 	metadata := map[string]interface{}{
 		"return": returnCode,
@@ -84,7 +99,10 @@ func makeStubs(returnCode float64, waitTime time.Duration, validator func(pb.Upg
 		validator: validator,
 	}
 
-	lxd := &lxdStub{operation: op}
+	lxd := &lxdStub{
+		operation: op,
+		osRelease: makeOsRelease("stretch"),
+	}
 
 	server := &tremplinServer{
 		lxd:                         lxd,
@@ -114,17 +132,17 @@ func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 	// This needs to be long enough that the second Start runs before the first finishes.
 	server, _, _ := makeStubs(0.0, 1*time.Minute, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start, got status %v", status)
 	}
 
-	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_ALREADY_RUNNING {
 		t.Fatalf("Failed to correctly fail when an upgrade is already running, got status %v", status)
 	}
 
-	status, _ = server.startUpgradeContainer("test2", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ = server.startUpgradeContainer("test2", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to allow multiple upgrades on separate containers, got status %v", status)
 	}
@@ -144,7 +162,7 @@ func TestStartUpgradeContainerCanRetryAfterFailure(t *testing.T) {
 
 	// Immediate failure.
 	lxd.execError = errors.New("I'm a test error :)")
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_FAILED {
 		t.Fatal("StartUpgrade didn't fail when it should've failed")
 	}
@@ -152,14 +170,14 @@ func TestStartUpgradeContainerCanRetryAfterFailure(t *testing.T) {
 	// Eventual failure.
 	lxd.execError = nil
 	operation.apiOperation.Metadata["return"] = 1.0
-	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start on retry after immediate failure, got status %v", status)
 	}
 
 	// Wait until the above completes.
 	<-done
-	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start on retry after eventual failure, got status %v", status)
 	}
@@ -169,21 +187,50 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 	server, _, _ := makeStubs(127.0, 0*time.Millisecond, nil)
 
 	tables := []struct {
-		from     pb.UpgradeContainerRequest_Version
-		to       pb.UpgradeContainerRequest_Version
-		expected pb.UpgradeContainerResponse_Status
+		codename     string
+		to           pb.UpgradeContainerRequest_Version
+		expected     pb.UpgradeContainerResponse_Status
+		expectedArgs []string
 	}{
-		{pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_STARTED},
-		{pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_NOT_SUPPORTED},
-		{pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerResponse_NOT_SUPPORTED},
-		{pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_UNKNOWN, pb.UpgradeContainerResponse_NOT_SUPPORTED},
-		{pb.UpgradeContainerRequest_UNKNOWN, pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_NOT_SUPPORTED},
+		{"", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"bookworm/sid", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"stretch", pb.UpgradeContainerRequest_UNKNOWN, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"buster", pb.UpgradeContainerRequest_UNKNOWN, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"bullseye", pb.UpgradeContainerRequest_UNKNOWN, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"stretch", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"buster", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"stretch", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BUSTER"}},
+		{"buster", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath}},
+		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
+		{"stretch", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BUSTER", "DEBIAN_BULLSEYE"}},
+		{"buster", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BULLSEYE"}},
+		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath}},
 	}
 
 	for _, table := range tables {
-		status, _ := server.startUpgradeContainer(fmt.Sprintf("%d->%d", table.from, table.to), table.from, table.to)
+		server.lxd.(*lxdStub).lastExec = nil
+		server.lxd.(*lxdStub).osRelease = makeOsRelease(table.codename)
+		status, err := server.startUpgradeContainer(fmt.Sprintf("%s -> %s", table.codename, table.to.String()), table.to)
 		if status != table.expected {
-			t.Errorf("Status of (%v -> %v) was incorrect, got: %v, want: %v.", table.from, table.to, status, table.expected)
+			t.Errorf("Status of (%s -> %s) was incorrect, got: %v, want: %v.", table.codename, table.to.String(), status, table.expected)
+			t.Errorf("Response message: %q", err)
+		}
+
+		var actualArgs []string
+		if server.lxd.(*lxdStub).lastExec != nil {
+			actualArgs = server.lxd.(*lxdStub).lastExec.Command
+		}
+
+		argsCorrect := true
+		for i, _ := range table.expectedArgs {
+			if table.expectedArgs[i] != actualArgs[i] {
+				argsCorrect = false
+				break
+			}
+		}
+		if !argsCorrect || len(table.expectedArgs) != len(actualArgs) {
+			t.Errorf("(%s -> %d): Ran unexpected command %v and not %v", table.codename, table.to, actualArgs, table.expectedArgs)
 		}
 	}
 }
@@ -199,7 +246,7 @@ func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
 	// This needs to be long enough that we see an in-progress message get sent.
 	server, _, _ := makeStubs(0.0, 1*time.Minute, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start, got %v", status)
@@ -223,7 +270,7 @@ func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
 
 	server, _, _ := makeStubs(0.0, 0*time.Millisecond, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start, got %v", status)
@@ -247,7 +294,7 @@ func TestUpgradeContainerSendsFailureOnUnsuccessfulEnd(t *testing.T) {
 
 	server, _, _ := makeStubs(127.0, 0*time.Millisecond, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start, got %v", status)
@@ -268,7 +315,7 @@ func TestUpgradeContainerSendsFailureOnLxdError(t *testing.T) {
 	server, _, op := makeStubs(0.0, 0*time.Millisecond, callback)
 	op.waitError = errors.New("I'm a test error :)")
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
 		t.Fatalf("Failed to start, got %v", status)
