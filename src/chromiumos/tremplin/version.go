@@ -17,7 +17,7 @@ import (
 
 	pb "chromiumos/vm_tools/tremplin_proto"
 
-	"github.com/lxc/lxd/client"
+	lxd "github.com/lxc/lxd/client"
 )
 
 const (
@@ -61,11 +61,12 @@ func getMilestone() (int, error) {
 // OsRelease encapsulates a subset of the os-release info as documented
 // at https://www.freedesktop.org/software/systemd/man/os-release.html
 type OsRelease struct {
-	prettyName string
-	name       string
-	version    string
-	versionID  string
-	id         string
+	prettyName      string
+	name            string
+	version         string
+	versionID       string
+	versionCodename string
+	id              string
 }
 
 // getFileResolvingSymlinks will get the contents of a container file while
@@ -121,6 +122,8 @@ func getGuestOSRelease(lxd lxd.ContainerServer, name string) (*OsRelease, error)
 			osRelease.version = dequote(s[1])
 		case "VERSION_ID":
 			osRelease.versionID = dequote(s[1])
+		case "VERSION_CODENAME":
+			osRelease.versionCodename = dequote(s[1])
 		case "ID":
 			osRelease.id = dequote(s[1])
 		}
@@ -139,8 +142,12 @@ func (o *OsRelease) toProto() *pb.OsRelease {
 }
 
 func createAptSourceList(milestone int, osVersion string) string {
-	if milestone < 70 {
-		return "deb https://storage.googleapis.com/cros-packages stretch main\n"
+	if osVersion == "" {
+		// The VERSION_CODENAME tag is only required to be
+		// present on stable versions of debian. For
+		// testing/unstable/experimental, bullseye is the most
+		// recent set of packages.
+		osVersion = "bullseye"
 	}
 	return fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersion)
 }
