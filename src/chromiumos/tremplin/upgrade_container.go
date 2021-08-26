@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,11 +59,31 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersi
 		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Container appears to have version %q, which is more recent then target version %q", sourceVersionEnum.String(), targetVersion.String())
 	}
 
-	var ioSink = &stdioSink{}
-	execArgs := []string{upgradeScriptPath}
-	for i := sourceVersionEnum + 1; i <= targetVersion; i++ {
-		execArgs = append(execArgs, i.String())
+	// Find the user's home directory so we can put the log file there.
+	pw_db, err := NewPasswdDatabase(s.lxd, containerName)
+	if err != nil {
+		return pb.UpgradeContainerResponse_FAILED, fmt.Sprintf("Failed to parse /etc/passwd in container %q: %v", containerName, err)
 	}
+	var homedir string
+	for _, entry := range pw_db.passwd.Entries {
+		if entry.Uid == primaryUserID {
+			homedir = entry.Homedir
+			break
+		}
+	}
+	if homedir == "" {
+		return pb.UpgradeContainerResponse_FAILED, fmt.Sprintf("Could not find primary user in container %q", containerName)
+	}
+
+	var ioSink = &stdioSink{}
+	execArgs := []string{"/bin/bash", "-c"}
+	bashCmd := []string{upgradeScriptPath}
+	for i := sourceVersionEnum + 1; i <= targetVersion; i++ {
+		bashCmd = append(bashCmd, i.String())
+	}
+	bashCmd = append(bashCmd, "|", "sudo", "-u", "\\#"+strconv.Itoa(primaryUserID), "-g", "\\#"+strconv.Itoa(primaryUserID), "--", "tee", "--append", homedir+"/container-upgrade.log")
+	execArgs = append(execArgs, strings.Join(bashCmd, " "))
+
 	// If we are retrying an incomplete upgrade it might look like
 	// an upgrade to the same version. In that case we still want
 	// to call the upgrade script with no arguments so it can

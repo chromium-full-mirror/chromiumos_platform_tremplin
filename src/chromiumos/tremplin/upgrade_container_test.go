@@ -53,7 +53,14 @@ func (s *lxdStub) UpdateContainerState(containerName string, statePut api.Contai
 }
 
 func (s *lxdStub) GetContainerFile(containerName, path string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
-	reader := ioutil.NopCloser(strings.NewReader(s.osRelease))
+	var reader io.ReadCloser
+	if path == "/etc/os-release" {
+		reader = ioutil.NopCloser(strings.NewReader(s.osRelease))
+	} else if path == "/etc/passwd" {
+		reader = ioutil.NopCloser(strings.NewReader("root:x:0:0::/root:/bin/bash\nuser:x:1000:1000:fake user for testing:/home/user:/bin/bash"))
+	} else {
+		reader = ioutil.NopCloser(strings.NewReader(""))
+	}
 	resp := lxd.ContainerFileResponse{}
 	return reader, &resp, nil
 }
@@ -200,12 +207,12 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 		{"stretch", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
 		{"buster", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
 		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_STRETCH, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
-		{"stretch", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BUSTER"}},
-		{"buster", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath}},
+		{"stretch", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_STARTED, []string{"/bin/bash", "-c", upgradeScriptPath + " DEBIAN_BUSTER | sudo -u \\#1000 -g \\#1000 -- tee --append /home/user/container-upgrade.log"}},
+		{"buster", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_STARTED, []string{"/bin/bash", "-c", upgradeScriptPath + " | sudo -u \\#1000 -g \\#1000 -- tee --append /home/user/container-upgrade.log"}},
 		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_BUSTER, pb.UpgradeContainerResponse_NOT_SUPPORTED, []string{}},
-		{"stretch", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BUSTER", "DEBIAN_BULLSEYE"}},
-		{"buster", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BULLSEYE"}},
-		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath}},
+		{"stretch", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{"/bin/bash", "-c", upgradeScriptPath + " DEBIAN_BUSTER DEBIAN_BULLSEYE | sudo -u \\#1000 -g \\#1000 -- tee --append /home/user/container-upgrade.log"}},
+		{"buster", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{"/bin/bash", "-c", upgradeScriptPath + " DEBIAN_BULLSEYE | sudo -u \\#1000 -g \\#1000 -- tee --append /home/user/container-upgrade.log"}},
+		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{"/bin/bash", "-c", upgradeScriptPath + " | sudo -u \\#1000 -g \\#1000 -- tee --append /home/user/container-upgrade.log"}},
 	}
 
 	for _, table := range tables {
