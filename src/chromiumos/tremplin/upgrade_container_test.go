@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,10 @@ type listenerStub struct {
 	validator func(pb.UpgradeContainerProgress)
 }
 
+type containerFileServerStub struct {
+	lxd *lxdStub
+}
+
 func (s *lxdStub) ExecContainer(containerName string, exec api.ContainerExecPost, args *lxd.ContainerExecArgs) (lxd.Operation, error) {
 	s.operation.out = args.Stdout
 	s.lastExec = &exec
@@ -63,6 +68,20 @@ func (s *lxdStub) GetContainerFile(containerName, path string) (io.ReadCloser, *
 	}
 	resp := lxd.ContainerFileResponse{}
 	return reader, &resp, nil
+}
+
+func (s *containerFileServerStub) GetContainerFile(path string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
+	return s.lxd.GetContainerFile("unused", path)
+}
+
+func (s *containerFileServerStub) CreateContainerFile(path string, args lxd.ContainerFileArgs) (err error) {
+	log.Fatal("Not implemented")
+	return nil
+}
+
+func (s *containerFileServerStub) DeleteContainerFile(path string) (err error) {
+	log.Fatal("Not implemented")
+	return nil
 }
 
 func (s operationStub) Wait() (err error) {
@@ -110,6 +129,9 @@ func makeStubs(returnCode float64, waitTime time.Duration, validator func(pb.Upg
 		operation: op,
 		osRelease: makeOsRelease("stretch"),
 	}
+
+	cfs := &containerFileServerStub{}
+	OverrideContainerFileServerForTesting(cfs)
 
 	server := &tremplinServer{
 		lxd:                         lxd,

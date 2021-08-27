@@ -60,13 +60,14 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersi
 	}
 
 	// Find the user's home directory so we can put the log file there.
-	pw_db, err := NewPasswdDatabase(s.lxd, containerName)
+	cfs := NewContainerFileServer(containerName)
+	pw_db, err := NewPasswdDatabase(cfs)
 	if err != nil {
 		return pb.UpgradeContainerResponse_FAILED, fmt.Sprintf("Failed to parse /etc/passwd in container %q: %v", containerName, err)
 	}
 	var homedir string
 	for _, entry := range pw_db.passwd.Entries {
-		if entry.Uid == primaryUserID {
+		if entry.Uid == PrimaryUserID {
 			homedir = entry.Homedir
 			break
 		}
@@ -81,7 +82,7 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersi
 	for i := sourceVersionEnum + 1; i <= targetVersion; i++ {
 		bashCmd = append(bashCmd, i.String())
 	}
-	bashCmd = append(bashCmd, "|", "sudo", "-u", "\\#"+strconv.Itoa(primaryUserID), "-g", "\\#"+strconv.Itoa(primaryUserID), "--", "tee", "--append", homedir+"/container-upgrade.log")
+	bashCmd = append(bashCmd, "|", "sudo", "-u", "\\#"+strconv.Itoa(PrimaryUserID), "-g", "\\#"+strconv.Itoa(PrimaryUserID), "--", "tee", "--append", homedir+"/container-upgrade.log")
 	execArgs = append(execArgs, strings.Join(bashCmd, " "))
 
 	// If we are retrying an incomplete upgrade it might look like

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lxc/lxd/client"
+	lxd "github.com/lxc/lxd/client"
 )
 
 const testPasswd string = `root:x:0:0:root:/root:/bin/bash
@@ -289,7 +289,7 @@ func (s *fakeContainerFileServer) findEntry(filePath string, cwd *fakeDirectory)
 	return cwd, nil
 }
 
-func (s *fakeContainerFileServer) GetContainerFile(containerName string, filePath string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
+func (s *fakeContainerFileServer) GetContainerFile(filePath string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
 	entry, err := s.findEntry(filePath, &s.root)
 	if err != nil {
 		return nil, nil, err
@@ -319,7 +319,7 @@ func (s *fakeContainerFileServer) GetContainerFile(containerName string, filePat
 	return content, resp, nil
 }
 
-func (s *fakeContainerFileServer) CreateContainerFile(containerName string, filePath string, args lxd.ContainerFileArgs) error {
+func (s *fakeContainerFileServer) CreateContainerFile(filePath string, args lxd.ContainerFileArgs) error {
 	dirPath, filename := path.Split(filePath)
 
 	entry, err := s.findEntry(dirPath, &s.root)
@@ -384,7 +384,7 @@ func (s *fakeContainerFileServer) CreateContainerFile(containerName string, file
 	return nil
 }
 
-func (s *fakeContainerFileServer) DeleteContainerFile(containerName string, filePath string) error {
+func (s *fakeContainerFileServer) DeleteContainerFile(filePath string) error {
 	return errors.New("not yet implemented")
 }
 
@@ -479,7 +479,7 @@ func NewFakeFileServer(t *testing.T) *fakeContainerFileServer {
 }
 
 func (s *fakeContainerFileServer) assertContainerPath(filePath string, expect lxd.ContainerFileResponse) {
-	_, resp, err := s.GetContainerFile("", filePath)
+	_, resp, err := s.GetContainerFile(filePath)
 	if err != nil {
 		s.t.Fatalf("Failed to get %s: %v", filePath, err)
 	}
@@ -529,7 +529,7 @@ func TestFakeFileServer(t *testing.T) {
 
 	// Create a directory and ensure it can be read back.
 	testDir := "/home/foo"
-	if err := s.CreateContainerFile("", testDir, lxd.ContainerFileArgs{
+	if err := s.CreateContainerFile(testDir, lxd.ContainerFileArgs{
 		Content:   bytes.NewReader([]byte("foo")),
 		UID:       int64(1000),
 		GID:       int64(1000),
@@ -552,7 +552,7 @@ func TestFakeFileServer(t *testing.T) {
 func TestUserOverwrite(t *testing.T) {
 	s := NewFakeFileServer(t)
 
-	pd, err := NewPasswdDatabase(s, "")
+	pd, err := NewPasswdDatabase(s)
 	if err != nil {
 		t.Fatalf("Failed to load passwd db: %v", err)
 	}
@@ -590,7 +590,7 @@ func TestUserOverwrite(t *testing.T) {
 func TestHomedirCreation(t *testing.T) {
 	s := NewFakeFileServer(t)
 
-	pd, err := NewPasswdDatabase(s, "")
+	pd, err := NewPasswdDatabase(s)
 	if err != nil {
 		t.Fatalf("Failed to load passwd db: %v", err)
 	}
@@ -614,7 +614,7 @@ func TestHomedirCreation(t *testing.T) {
 		t.Fatalf("Failed creating testuser2: %v", err)
 	}
 
-	_, _, err = s.GetContainerFile("", "/home/testuser2")
+	_, _, err = s.GetContainerFile("/home/testuser2")
 	if err == nil {
 		t.Fatalf("Expected no homedir for testuser2")
 	}
@@ -623,7 +623,7 @@ func TestHomedirCreation(t *testing.T) {
 func TestPersistence(t *testing.T) {
 	s := NewFakeFileServer(t)
 
-	pd, err := NewPasswdDatabase(s, "")
+	pd, err := NewPasswdDatabase(s)
 	if err != nil {
 		t.Fatalf("Failed to load passwd db: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestPersistence(t *testing.T) {
 	if err := pd.Save(); err != nil {
 		t.Fatalf("Failed to save PasswdDatabase: %v", err)
 	}
-	pd, err = NewPasswdDatabase(s, "")
+	pd, err = NewPasswdDatabase(s)
 	if err != nil {
 		t.Fatalf("Failed to reload passwd db: %v", err)
 	}
@@ -668,7 +668,7 @@ func TestPersistence(t *testing.T) {
 func TestGroupAddition(t *testing.T) {
 	s := NewFakeFileServer(t)
 
-	pd, err := NewPasswdDatabase(s, "")
+	pd, err := NewPasswdDatabase(s)
 	if err != nil {
 		t.Fatalf("Failed to load passwd db: %v", err)
 	}
@@ -712,7 +712,7 @@ func TestGroupAddition(t *testing.T) {
 func TestGroupOverwrite(t *testing.T) {
 	s := NewFakeFileServer(t)
 
-	pd, err := NewPasswdDatabase(s, "")
+	pd, err := NewPasswdDatabase(s)
 	if err != nil {
 		t.Fatalf("Failed to load passwd db: %v", err)
 	}

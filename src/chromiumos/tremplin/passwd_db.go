@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"encoding"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"path"
@@ -26,35 +25,28 @@ const (
 	shadowPath      = "/etc/shadow"
 )
 
-type containerFileServer interface {
-	GetContainerFile(containerName string, path string) (content io.ReadCloser, resp *lxd.ContainerFileResponse, err error)
-	CreateContainerFile(containerName string, path string, args lxd.ContainerFileArgs) (err error)
-	DeleteContainerFile(containerName string, path string) (err error)
-}
-
 type PasswdDatabase struct {
 	passwd      shadow.PasswdFile
 	shadow      shadow.ShadowFile
 	group       shadow.GroupFile
 	groupShadow shadow.GroupShadowFile
 
-	containerName string
-	lxd           containerFileServer
+	cfs ContainerFileServer
 }
 
 func daysSinceEpoch() uint64 {
 	return uint64(time.Since(time.Unix(0, 0)).Hours()) / 24
 }
 
-// NewPasswdDatabase loads PasswdDatabase state from the provided LXD container name.
-func NewPasswdDatabase(lxd containerFileServer, containerName string) (*PasswdDatabase, error) {
+// NewPasswdDatabase reads/writes PasswdDatabase state in a container using the
+// using the provided container file server.
+func NewPasswdDatabase(cfs ContainerFileServer) (*PasswdDatabase, error) {
 	pd := &PasswdDatabase{
-		containerName: containerName,
-		lxd:           lxd,
+		cfs: cfs,
 	}
 
 	loadContainerFile := func(path string, u encoding.TextUnmarshaler) error {
-		r, _, err := lxd.GetContainerFile(containerName, path)
+		r, _, err := cfs.GetContainerFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to find %q: %v", path, err)
 		}
@@ -114,7 +106,7 @@ func (pd *PasswdDatabase) Save() error {
 		if err != nil {
 			return fmt.Errorf("failed to marshal for %s: %v", path, err)
 		}
-		if err := pd.lxd.CreateContainerFile(pd.containerName, path, lxd.ContainerFileArgs{
+		if err := pd.cfs.CreateContainerFile(path, lxd.ContainerFileArgs{
 			Content:   bytes.NewReader(b),
 			UID:       0,
 			GID:       gid,
@@ -224,7 +216,7 @@ func (pd *PasswdDatabase) EnsureUserInGroup(user, group string) error {
 }
 
 func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
-	r, s, err := pd.lxd.GetContainerFile(pd.containerName, src)
+	r, s, err := pd.cfs.GetContainerFile(src)
 	if err != nil {
 		return fmt.Errorf("failed to find %q: %v", src, err)
 	}
@@ -236,7 +228,7 @@ func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
 			return fmt.Errorf("failed to read in file %q: %v", src, err)
 		}
 
-		if err := pd.lxd.CreateContainerFile(pd.containerName, dst, lxd.ContainerFileArgs{
+		if err := pd.cfs.CreateContainerFile(dst, lxd.ContainerFileArgs{
 			Content:   bytes.NewReader(b),
 			UID:       int64(uid),
 			GID:       int64(uid),
@@ -247,7 +239,7 @@ func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
 			return fmt.Errorf("failed to write %s to container %q: %v", s.Type, dst, err)
 		}
 	case "directory":
-		if err := pd.lxd.CreateContainerFile(pd.containerName, dst, lxd.ContainerFileArgs{
+		if err := pd.cfs.CreateContainerFile(dst, lxd.ContainerFileArgs{
 			UID:       int64(uid),
 			GID:       int64(uid),
 			Mode:      s.Mode,
@@ -297,7 +289,7 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 		homedir = fmt.Sprintf("/home/%s", username)
 		shell = "/bin/bash"
 
-		_, s, err := pd.lxd.GetContainerFile(pd.containerName, homedir)
+		_, s, err := pd.cfs.GetContainerFile(homedir)
 
 		// If there's a non-directory file where the home
 		// directory needs to go, get rid of it. If there's
@@ -307,14 +299,14 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 		createHomeDir := !(err == nil && s.Type == "directory")
 
 		if removeFile {
-			err := pd.lxd.DeleteContainerFile(pd.containerName, homedir)
+			err := pd.cfs.DeleteContainerFile(homedir)
 			if err != nil {
 				return fmt.Errorf("%v type file at path %v must be removed to create home directory, but could not be: %v", s.Type, homedir, err)
 			}
 		}
 
 		if createHomeDir {
-			if err := pd.lxd.CreateContainerFile(pd.containerName, homedir, lxd.ContainerFileArgs{
+			if err := pd.cfs.CreateContainerFile(homedir, lxd.ContainerFileArgs{
 				UID:  int64(uid),
 				GID:  int64(uid),
 				Mode: 0755,
@@ -324,7 +316,7 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 			}
 
 			// Copy home directory skeleton from /etc/skel if it exists.
-			_, s, err = pd.lxd.GetContainerFile(pd.containerName, "/etc/skel")
+			_, s, err = pd.cfs.GetContainerFile("/etc/skel")
 			if err == nil && s.Type == "directory" {
 				if err := pd.recursiveCopy("/etc/skel", homedir, uid); err != nil {
 					return fmt.Errorf("failed to populate homedir: %v", err)

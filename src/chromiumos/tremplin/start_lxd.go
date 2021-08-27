@@ -287,6 +287,10 @@ func (s *tremplinServer) ueventListen() error {
 
 func initProfile(c lxd.ContainerServer) error {
 	var defaultProfile api.ProfilesPost
+	// NOTE: If you change idmap then you must also update the map in
+	// container_file_server.go (idToContainer and idFromContainer). Also, this
+	// will trigger a remap so strongly considering migrating users to shiftfs
+	// beforehand.
 	if err := json.Unmarshal([]byte(`{
 		"name": "default",
 		"config": {

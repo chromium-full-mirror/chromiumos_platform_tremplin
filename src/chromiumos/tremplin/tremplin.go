@@ -53,10 +53,10 @@ const (
 	setupFinishedKey   = "tremplinSetupFinished"
 
 	lingerPath         = "/var/lib/systemd/linger"
-	primaryUserID      = 1000
-	chronosAccessID    = 1001
-	androidRootID      = 655360
-	androidEverybodyID = 665357
+	PrimaryUserID      = 1000
+	ChronosAccessID    = 1001
+	AndroidRootID      = 655360
+	AndroidEverybodyID = 665357
 
 	exportWriterBufferSize = 16 * 1024 * 1024 // 16Mib.
 
@@ -1124,14 +1124,15 @@ func (s *tremplinServer) GetContainerUsername(ctx context.Context, in *pb.GetCon
 		return response, nil
 	}
 
-	pd, err := NewPasswdDatabase(s.lxd, in.ContainerName)
+	cfs := NewContainerFileServer(in.ContainerName)
+	pd, err := NewPasswdDatabase(cfs)
 	if err != nil {
 		response.Status = pb.GetContainerUsernameResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to get container passwd db: %v", err)
 		return response, nil
 	}
 
-	p := pd.PasswdForUid(primaryUserID)
+	p := pd.PasswdForUid(PrimaryUserID)
 	if p == nil {
 		response.Status = pb.GetContainerUsernameResponse_USER_NOT_FOUND
 		response.FailureReason = "failed to find user for uid"
@@ -1151,29 +1152,32 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 
 	response := &pb.SetUpUserResponse{}
 
-	pd, err := NewPasswdDatabase(s.lxd, in.ContainerName)
+	cfs := NewContainerFileServer(in.ContainerName)
+	pd, err := NewPasswdDatabase(cfs)
 	if err != nil {
 		response.Status = pb.SetUpUserResponse_UNKNOWN
 		response.FailureReason = fmt.Sprintf("failed to get container passwd db: %v", err)
 		return response, nil
 	}
 
-	p := pd.PasswdForUid(primaryUserID)
+	p := pd.PasswdForUid(PrimaryUserID)
 	if p != nil {
 		response.Username = p.Name
 	} else {
 		response.Username = in.ContainerUsername
 	}
 
+	// Note: If you add/remove users you probably also need to update raw.idmap
+	// in start_lxd.go and the id maps in container_file_server.go.
 	users := []struct {
 		name         string
 		uid          uint32
 		loginEnabled bool
 	}{
-		{response.Username, primaryUserID, true},
-		{"chronos-access", chronosAccessID, false},
-		{"android-everybody", androidEverybodyID, false},
-		{"android-root", androidRootID, false},
+		{response.Username, PrimaryUserID, true},
+		{"chronos-access", ChronosAccessID, false},
+		{"android-everybody", AndroidEverybodyID, false},
+		{"android-root", AndroidRootID, false},
 	}
 
 	for _, user := range users {
@@ -1220,7 +1224,7 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	}
 
 	// Enable loginctl linger for the target user.
-	if err := pd.lxd.CreateContainerFile(in.ContainerName, lingerPath, lxd.ContainerFileArgs{
+	if err := cfs.CreateContainerFile(lingerPath, lxd.ContainerFileArgs{
 		UID:  0,
 		GID:  0,
 		Mode: 0755,
@@ -1231,11 +1235,12 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 		return response, nil
 	}
 	userLingerPath := path.Join(lingerPath, response.Username)
-	if err := pd.lxd.CreateContainerFile(in.ContainerName, userLingerPath, lxd.ContainerFileArgs{
-		UID:  0,
-		GID:  0,
-		Mode: 0644,
-		Type: "file",
+	if err := cfs.CreateContainerFile(userLingerPath, lxd.ContainerFileArgs{
+		Content: nil,
+		UID:     0,
+		GID:     0,
+		Mode:    0644,
+		Type:    "file",
 	}); err != nil {
 		response.Status = pb.SetUpUserResponse_FAILED
 		response.FailureReason = fmt.Sprintf("failed to create linger file: %v", err)
