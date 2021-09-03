@@ -139,19 +139,19 @@ func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 	// This needs to be long enough that the second Start runs before the first finishes.
 	server, _, _ := makeStubs(0.0, 1*time.Minute, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got status %v", status)
+		t.Fatalf("Failed to start, got status %v and message %s", status, msg)
 	}
 
-	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_ALREADY_RUNNING {
-		t.Fatalf("Failed to correctly fail when an upgrade is already running, got status %v", status)
+		t.Fatalf("Failed to correctly fail when an upgrade is already running, got status %v and message %s", status, msg)
 	}
 
-	status, _ = server.startUpgradeContainer("test2", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg = server.startUpgradeContainer("test2", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to allow multiple upgrades on separate containers, got status %v", status)
+		t.Fatalf("Failed to allow multiple upgrades on separate containers, got status %v and message %s", status, msg)
 	}
 	<-done
 }
@@ -177,16 +177,16 @@ func TestStartUpgradeContainerCanRetryAfterFailure(t *testing.T) {
 	// Eventual failure.
 	lxd.execError = nil
 	operation.apiOperation.Metadata["return"] = 1.0
-	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start on retry after immediate failure, got status %v", status)
+		t.Fatalf("Failed to start on retry after immediate failure, got status %v and message %s", status, msg)
 	}
 
 	// Wait until the above completes.
 	<-done
-	status, _ = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg = server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start on retry after eventual failure, got status %v", status)
+		t.Fatalf("Failed to start on retry after eventual failure, got status %v and message %s", status, msg)
 	}
 }
 
@@ -253,10 +253,10 @@ func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
 	// This needs to be long enough that we see an in-progress message get sent.
 	server, _, _ := makeStubs(0.0, 1*time.Minute, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %v", status)
+		t.Fatalf("Failed to start, got %v and message %s", status, msg)
 	}
 	s := <-statusChannel
 	if s.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
@@ -277,10 +277,10 @@ func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
 
 	server, _, _ := makeStubs(0.0, 0*time.Millisecond, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %v", status)
+		t.Fatalf("Failed to start, got %v and message %s", status, msg)
 	}
 	s := <-ch
 	if s.Status != pb.UpgradeContainerProgress_SUCCEEDED {
@@ -301,10 +301,10 @@ func TestUpgradeContainerSendsFailureOnUnsuccessfulEnd(t *testing.T) {
 
 	server, _, _ := makeStubs(127.0, 0*time.Millisecond, callback)
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %v", status)
+		t.Fatalf("Failed to start, got %v and message %s", status, msg)
 	}
 	if s := <-statusChannel; s != pb.UpgradeContainerProgress_FAILED {
 		t.Fatalf("Didn't get failure message, got %v", s)
@@ -322,10 +322,10 @@ func TestUpgradeContainerSendsFailureOnLxdError(t *testing.T) {
 	server, _, op := makeStubs(0.0, 0*time.Millisecond, callback)
 	op.waitError = errors.New("I'm a test error :)")
 
-	status, _ := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
+	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %v", status)
+		t.Fatalf("Failed to start, got %v and message %s", status, msg)
 	}
 	if s := <-statusChannel; s != pb.UpgradeContainerProgress_FAILED {
 		t.Fatalf("Didn't get failure message, got %v", s)
