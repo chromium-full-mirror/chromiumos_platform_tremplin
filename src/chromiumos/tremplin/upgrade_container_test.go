@@ -39,7 +39,7 @@ type operationStub struct {
 
 type listenerStub struct {
 	pb.TremplinListenerClient
-	validator func(pb.UpgradeContainerProgress)
+	validator func(*pb.UpgradeContainerProgress)
 }
 
 type containerFileServerStub struct {
@@ -96,7 +96,7 @@ func (s operationStub) Get() api.Operation {
 
 func (s listenerStub) UpgradeContainerStatus(ctx context.Context, in *pb.UpgradeContainerProgress, opts ...grpc.CallOption) (*pb.EmptyMessage, error) {
 	if s.validator != nil {
-		s.validator(*in)
+		s.validator(in)
 	}
 	return &pb.EmptyMessage{}, nil
 }
@@ -109,7 +109,7 @@ func makeOsRelease(codename string) string {
 	return fmt.Sprintf("ID=debian\nVERSION_CODENAME=%s", codename)
 }
 
-func makeStubs(returnCode float64, waitTime time.Duration, validator func(pb.UpgradeContainerProgress)) (*tremplinServer, *lxdStub, *operationStub) {
+func makeStubs(returnCode float64, waitTime time.Duration, validator func(*pb.UpgradeContainerProgress)) (*tremplinServer, *lxdStub, *operationStub) {
 	metadata := map[string]interface{}{
 		"return": returnCode,
 	}
@@ -154,7 +154,7 @@ func contains(arr []string, needle string) bool {
 
 func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 	done := make(chan bool)
-	callback := func(status pb.UpgradeContainerProgress) {
+	callback := func(status *pb.UpgradeContainerProgress) {
 		done <- true
 	}
 	// Our upgrade sleeps for a very long time in the background, we don't wait for or need it to finish so it's fine.
@@ -181,7 +181,7 @@ func TestStartUpgradeContainerLimitOneInProgressPerContainer(t *testing.T) {
 // If the upgrade fails we should be able to try upgrading again.
 func TestStartUpgradeContainerCanRetryAfterFailure(t *testing.T) {
 	done := make(chan bool)
-	callback := func(status pb.UpgradeContainerProgress) {
+	callback := func(status *pb.UpgradeContainerProgress) {
 		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
 			done <- true
 		}
@@ -265,8 +265,8 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 }
 
 func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
-	statusChannel := make(chan pb.UpgradeContainerProgress)
-	callback := func(status pb.UpgradeContainerProgress) {
+	statusChannel := make(chan *pb.UpgradeContainerProgress)
+	callback := func(status *pb.UpgradeContainerProgress) {
 		statusChannel <- status
 		fmt.Println(status.ProgressMessages)
 	}
@@ -290,8 +290,8 @@ func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
 }
 
 func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
-	ch := make(chan pb.UpgradeContainerProgress)
-	callback := func(status pb.UpgradeContainerProgress) {
+	ch := make(chan *pb.UpgradeContainerProgress)
+	callback := func(status *pb.UpgradeContainerProgress) {
 		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
 			ch <- status
 		}
@@ -315,7 +315,7 @@ func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
 
 func TestUpgradeContainerSendsFailureOnUnsuccessfulEnd(t *testing.T) {
 	statusChannel := make(chan pb.UpgradeContainerProgress_Status)
-	callback := func(status pb.UpgradeContainerProgress) {
+	callback := func(status *pb.UpgradeContainerProgress) {
 		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
 			statusChannel <- status.Status
 		}
@@ -335,7 +335,7 @@ func TestUpgradeContainerSendsFailureOnUnsuccessfulEnd(t *testing.T) {
 
 func TestUpgradeContainerSendsFailureOnLxdError(t *testing.T) {
 	statusChannel := make(chan pb.UpgradeContainerProgress_Status)
-	callback := func(status pb.UpgradeContainerProgress) {
+	callback := func(status *pb.UpgradeContainerProgress) {
 		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
 			statusChannel <- status.Status
 		}
@@ -355,8 +355,8 @@ func TestUpgradeContainerSendsFailureOnLxdError(t *testing.T) {
 }
 
 func TestCancelNotRunning(t *testing.T) {
-	ch := make(chan pb.UpgradeContainerProgress)
-	callback := func(status pb.UpgradeContainerProgress) {
+	ch := make(chan *pb.UpgradeContainerProgress)
+	callback := func(status *pb.UpgradeContainerProgress) {
 		if status.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
 			ch <- status
 		}
