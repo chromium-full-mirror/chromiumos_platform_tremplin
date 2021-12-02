@@ -19,7 +19,7 @@ const upgradeScriptPath = "/opt/google/cros-containers/bin/upgrade_container"
 
 func (s *tremplinServer) shutDownContainer(containerName string) error {
 	log.Printf("shutdown")
-	err := s.stopContainer(containerName)
+	_, err := s.stopContainer(containerName, true)
 	if err != nil {
 		return fmt.Errorf("Failed to stop container %v with error %v", containerName, err)
 	}

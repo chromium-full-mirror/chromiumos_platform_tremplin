@@ -321,7 +321,7 @@ func (s *tremplinServer) renameContainer(oldName, newName string) error {
 }
 
 // stopContainer stops the specified container.
-func (s *tremplinServer) stopContainer(containerName string) error {
+func (s *tremplinServer) stopContainer(containerName string, wait bool) (lxd.Operation, error) {
 	reqState := api.ContainerStatePut{
 		Action:  "stop",
 		Timeout: -1,
@@ -330,12 +330,15 @@ func (s *tremplinServer) stopContainer(containerName string) error {
 	log.Printf("stopContainer name: %v lxd: %v", containerName, s.lxd)
 	op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
 	if err != nil {
-		return fmt.Errorf("error calling stop container %s: %v", containerName, err)
+		return nil, fmt.Errorf("error calling stop container %s: %v", containerName, err)
+	}
+	if !wait {
+		return op, nil
 	}
 	if err = op.Wait(); err != nil {
-		return fmt.Errorf("error waiting to stop container %s: %v", containerName, err)
+		return nil, fmt.Errorf("error waiting to stop container %s: %v", containerName, err)
 	}
-	return nil
+	return nil, nil
 }
 
 // writeContainerFile writes content to fileName in containerName.
@@ -463,7 +466,7 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 
 	// Stop <container>-crostini-remap.
 	log.Printf("Remap: stop %s", remapName)
-	err = s.stopContainer(remapName)
+	_, err = s.stopContainer(remapName, true)
 	if err != nil {
 		return nil, "", err
 	}
@@ -996,12 +999,7 @@ func (s *tremplinServer) DeleteContainer(ctx context.Context, in *pb.DeleteConta
 	}
 
 	if container.StatusCode == api.Running {
-		reqState := api.ContainerStatePut{
-			Action:  "stop",
-			Timeout: -1,
-			Force:   true,
-		}
-		op, err := s.lxd.UpdateContainerState(container.Name, reqState, "")
+		op, err := s.stopContainer(container.Name, false)
 
 		if err != nil {
 			response.Status = pb.DeleteContainerResponse_FAILED
@@ -1026,6 +1024,70 @@ func (s *tremplinServer) DeleteContainer(ctx context.Context, in *pb.DeleteConta
 	}
 
 	response.Status = pb.DeleteContainerResponse_DELETING
+	return response, nil
+}
+
+// StopContainer implements tremplin.StopContainer.
+func (s *tremplinServer) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {
+	log.Printf("Received StopContainer RPC: %s", in.ContainerName)
+
+	response := &pb.StopContainerResponse{}
+
+	container, _, err := s.lxd.GetContainer(in.ContainerName)
+	if container == nil {
+		response.Status = pb.StopContainerResponse_DOES_NOT_EXIST
+		return response, nil
+	}
+	if err != nil {
+		response.Status = pb.StopContainerResponse_FAILED
+		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
+		return response, nil
+	}
+
+	sendStatus := func(op api.Operation) {
+		req := &pb.ContainerStopProgress{ContainerName: container.Name}
+		switch op.StatusCode {
+		case api.Pending, api.Running:
+			req.Status = pb.ContainerStopProgress_STOPPING
+		case api.Success:
+			req.Status = pb.ContainerStopProgress_STOPPED
+		case api.Cancelled:
+			req.Status = pb.ContainerStopProgress_CANCELLED
+			req.FailureReason = op.Err
+		case api.Failure:
+			req.Status = pb.ContainerStopProgress_FAILED
+			req.FailureReason = op.Err
+		default:
+			req.Status = pb.ContainerStopProgress_UNKNOWN
+			req.FailureReason = fmt.Sprintf("unhandled stop status: %s, %s", op.Status, op.Err)
+		}
+		if _, err := s.listenerClient.UpdateStopStatus(context.Background(), req); err != nil {
+			log.Printf("Could not update stop status on host: %v", err)
+		}
+
+	}
+
+	if container.StatusCode == api.Running {
+		op, err := s.stopContainer(container.Name, false)
+
+		if err != nil {
+			response.Status = pb.StopContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to stop container: %v", err)
+			return response, nil
+		}
+
+		_, err = op.AddHandler(sendStatus)
+
+		if err != nil {
+			response.Status = pb.StopContainerResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to add stop operation handler: %v", err)
+			return response, nil
+		}
+		response.Status = pb.StopContainerResponse_STOPPING
+	} else {
+		response.Status = pb.StopContainerResponse_STOPPED
+	}
+
 	return response, nil
 }
 
@@ -1723,7 +1785,7 @@ func (s *tremplinServer) deleteContainer(containerName string) error {
 	}
 	if c.StatusCode != 0 && c.StatusCode != api.Stopped {
 		log.Printf("Force stopping container %s before deleting", containerName)
-		err := s.stopContainer(containerName)
+		_, err := s.stopContainer(containerName, true)
 		if err != nil {
 			return err
 		}
