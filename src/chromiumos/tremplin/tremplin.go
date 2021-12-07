@@ -655,6 +655,7 @@ func (s *tremplinServer) updateAptKeys(containerName string) {
 }
 
 func (s *tremplinServer) handleCreateImageOperation(name string, op api.Operation) {
+	log.Printf("Create image operation handler triggered. Status: %v", op.Status)
 	req := &pb.ContainerCreationProgress{
 		ContainerName: name,
 	}
@@ -731,6 +732,7 @@ func (s *tremplinServer) isContainerMetadataKeySet(containerName string, key str
 
 func (s *tremplinServer) handleCreateOperation(op api.Operation, finalName string) {
 	containers := op.Resources["containers"]
+	log.Printf("Create operation handler triggered. Status: %v", op.Status)
 
 	if len(containers) != 1 {
 		log.Printf("Got %v containers instead of 1", len(containers))
@@ -778,6 +780,7 @@ func (s *tremplinServer) handleCreateOperation(op api.Operation, finalName strin
 		req.FailureReason = fmt.Sprintf("unhandled create status: %s", op.Status)
 	}
 
+	log.Printf("Updating host with creation status: %v", req.Status)
 	_, err := s.listenerClient.UpdateCreateStatus(context.Background(), req)
 	if err != nil {
 		log.Printf("Could not update create status on host: %v", err)
@@ -828,6 +831,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 
 	// Import the image from tarballs.
 	if len(in.RootfsPath) > 0 && len(in.MetadataPath) > 0 {
+		log.Printf("Importing from tarball")
 		rootfsReader, err := os.Open(in.RootfsPath)
 		if err != nil {
 			response.Status = pb.CreateContainerResponse_FAILED
@@ -845,6 +849,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 		// before transferring it to the daemon. Since this can take a while, run CreateImage
 		// in a separate goroutine and return CREATING to the host immediately.
 		go func() {
+			log.Printf("Calling lxd.CreateImage for tarball")
 			op, err := s.lxd.CreateImage(api.ImagesPost{
 				ImagePut: api.ImagePut{},
 			}, &lxd.ImageCreateArgs{
@@ -866,7 +871,9 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 					return
 				}
 			}
-			// If the image import was started successfully, register the normal operation handler.
+			// If the image import was started successfully, register the normal
+			// operation handler.
+			log.Printf("Registering create image operation handler for tarball")
 			_, err = op.AddHandler(func(op api.Operation) { s.handleCreateImageOperation(in.ContainerName, op) })
 			if err != nil {
 				log.Fatal("Failed to add create image operation handler: ", err)
@@ -878,6 +885,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 		return response, nil
 	}
 
+	log.Printf("Using image server")
 	imageServerUrl := strings.Replace(in.ImageServer, "%d", strconv.Itoa(s.milestone), 1)
 
 	imageServer, err := lxd.ConnectSimpleStreams(imageServerUrl, nil)
@@ -894,6 +902,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 		return response, nil
 	}
 
+	log.Printf("Getting image")
 	image, _, err := imageServer.GetImage(alias.Target)
 	if err != nil {
 		response.Status = pb.CreateContainerResponse_FAILED
@@ -908,6 +917,7 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 			Alias: alias.Name,
 		},
 	}
+	log.Printf("Creating container from image")
 	op, err := s.lxd.CreateContainerFromImage(imageServer, *image, containersPost)
 	if err != nil {
 		response.Status = pb.CreateContainerResponse_FAILED
