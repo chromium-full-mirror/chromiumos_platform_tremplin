@@ -178,6 +178,42 @@ type tremplinServer struct {
 	auditClient                 *libaudit.AuditClient
 }
 
+// register for lifecycle events from lxd
+func (s *tremplinServer) subscribeToEvents() error {
+	listener, err := s.lxd.GetEvents()
+	if err != nil {
+		return err
+	}
+
+	_, err = listener.AddHandler([]string{"lifecycle"}, func(e api.Event) {
+		var unmarshaledLifecycle api.EventLifecycle
+		if err := json.Unmarshal(e.Metadata, &unmarshaledLifecycle); err != nil {
+			log.Print("Error unmarshalling lifecycle: ", err)
+			return
+		}
+		log.Printf("Received lifecycle event, Action: %s, Source: %s",
+			unmarshaledLifecycle.Action, unmarshaledLifecycle.Source)
+		if unmarshaledLifecycle.Action == "container-shutdown" {
+			if !strings.HasPrefix(unmarshaledLifecycle.Source, "/1.0/containers/") {
+				log.Printf("Could not parse container name out of: %v",
+					unmarshaledLifecycle.Source)
+				return
+			}
+
+			containerName := strings.TrimPrefix(unmarshaledLifecycle.Source,
+				"/1.0/containers/")
+
+			// Notify cicerone that container has been shutdown.
+			_, err = s.listenerClient.ContainerShutdown(context.Background(), &pb.ContainerShutdownInfo{ContainerName: containerName})
+			if err != nil {
+				log.Printf("Could not notify ContainerShutdown of %s on host: %v", containerName, err)
+			}
+		}
+	})
+
+	return err
+}
+
 // execProgramAsync starts running a program in a container.
 func (s *tremplinServer) execProgramAsync(containerName string, args []string, stdout io.WriteCloser, stderr io.WriteCloser) (op lxd.Operation, err error) {
 	req := api.ContainerExecPost{

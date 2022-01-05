@@ -656,6 +656,7 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 	// Listen for device updates.
 	s.lxd = c
 	go s.ueventListen()
+	go s.subscribeToEvents()
 	return nil
 }
 
