@@ -260,7 +260,7 @@ func (s *tremplinServer) ueventListen() error {
 		}
 
 		if !validContainerDevice(devName) {
-			log.Print("Skipping device (not on whitelist): ", devName)
+			log.Print("Skipping device (not on allowlist): ", devName)
 			continue
 		}
 

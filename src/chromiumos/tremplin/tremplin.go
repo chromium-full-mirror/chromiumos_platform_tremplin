@@ -672,7 +672,7 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 	}
 }
 
-// updateAptKeys will try to pull updates to the master Google Linux package signing key,
+// updateAptKeys will try to pull updates to the parent Google Linux package signing key,
 // including importing any new subkeys. If it fails (e.g. offline) then it logs an error
 // and exits.
 // NOTE: This function sleeps for 1 minute first, run it async.
