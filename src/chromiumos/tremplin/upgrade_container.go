@@ -59,7 +59,9 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersi
 	}
 
 	var ioSink = &stdioSink{}
-	execArgs := []string{upgradeScriptPath}
+	// Put the script in a PID namespace so if we kill it all its
+	// child processes go away too.
+	execArgs := []string{"unshare", "--pid", "--fork", upgradeScriptPath}
 	for i := sourceVersionEnum + 1; i <= targetVersion; i++ {
 		execArgs = append(execArgs, i.String())
 	}

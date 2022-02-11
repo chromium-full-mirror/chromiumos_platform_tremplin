@@ -245,14 +245,22 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 		}
 
 		argsCorrect := true
-		for i, _ := range table.expectedArgs {
-			if table.expectedArgs[i] != actualArgs[i] {
+		var expectedArgs []string
+		if len(table.expectedArgs) > 0 {
+			cmdPrefix := []string{"unshare", "--pid", "--fork"}
+			expectedArgs = append(cmdPrefix, table.expectedArgs...)
+		} else {
+			expectedArgs = table.expectedArgs
+		}
+
+		for i, _ := range expectedArgs {
+			if expectedArgs[i] != actualArgs[i] {
 				argsCorrect = false
 				break
 			}
 		}
-		if !argsCorrect || len(table.expectedArgs) != len(actualArgs) {
-			t.Errorf("(%s -> %d): Ran unexpected command %v and not %v", table.codename, table.to, actualArgs, table.expectedArgs)
+		if !argsCorrect || len(expectedArgs) != len(actualArgs) {
+			t.Errorf("(%s -> %d): Ran unexpected command %v and not %v", table.codename, table.to, actualArgs, expectedArgs)
 		}
 	}
 }
