@@ -47,6 +47,7 @@ var validContainerDevices = []*regexp.Regexp{
 	regexp.MustCompile("^snd/.*$"),
 	regexp.MustCompile("^tty(ACM|USB)\\d+$"),
 	regexp.MustCompile("^kvm$"),
+	regexp.MustCompile("^wl0$"),
 }
 
 type nameField struct {
@@ -347,11 +348,6 @@ func initProfile(c lxd.ContainerServer) error {
 			},
 			"tun": {
 				"source": "/dev/net/tun",
-				"mode":   "0666",
-				"type":   "unix-char"
-			},
-			"wl0": {
-				"source": "/dev/wl0",
 				"mode":   "0666",
 				"type":   "unix-char"
 			},
