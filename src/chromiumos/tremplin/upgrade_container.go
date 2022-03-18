@@ -59,9 +59,7 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersi
 	}
 
 	var ioSink = &stdioSink{}
-	// Put the script in a PID namespace so if we kill it all its
-	// child processes go away too.
-	execArgs := []string{"unshare", "--pid", "--fork", upgradeScriptPath}
+	execArgs := []string{"setsid", upgradeScriptPath}
 	for i := sourceVersionEnum + 1; i <= targetVersion; i++ {
 		execArgs = append(execArgs, i.String())
 	}
@@ -144,8 +142,21 @@ func (s *tremplinServer) cancelUpgradeContainer(containerName string) (pb.Cancel
 	} else {
 		// LXD doesn't support aborting an in-progress exec but that's all right, kill -9 will abort whatever we want.
 		// babysitContainerUpgrade then detects that the job is no longer running and cleans up + informs the listener.
-		execArgs := []string{"pkill", "-9", "-f", upgradeScriptPath}
+
+		// If we just kill the upgrade script, any child processes keep running under init, which is not what we want. If we instead target the session ID we will get every descendant process that didn't intentionally disassociate itself from its parent.
+		execArgs := []string{"pgrep", "--delimiter", ",", "-f", upgradeScriptPath}
+		log.Print("Running ", execArgs)
 		ret, stdout, stderr, err := s.execProgram(containerName, execArgs)
+		if ret != 0 || err != nil {
+			return pb.CancelUpgradeContainerResponse_FAILED, fmt.Sprintf("Error finding upgrade process: return code: %d, error: %v, stdout: %s, stderr: %s", ret, err, stdout, stderr)
+		}
+		sid := strings.TrimSpace(stdout)
+		log.Print("Found processes: ", sid)
+
+		execArgs = []string{"pkill", "--echo", "-9", "--session", sid}
+		log.Print("Running ", execArgs)
+		ret, stdout, stderr, err = s.execProgram(containerName, execArgs)
+		log.Print("Canceled upgrade, killed the following processes: ", stdout)
 		if ret != 0 || err != nil {
 			return pb.CancelUpgradeContainerResponse_FAILED, fmt.Sprintf("Error cancelling upgrade: return code: %d, error: %v, stdout: %s, stderr: %s", ret, err, stdout, stderr)
 		}

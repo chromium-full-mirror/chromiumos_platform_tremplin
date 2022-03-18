@@ -247,7 +247,7 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 		argsCorrect := true
 		var expectedArgs []string
 		if len(table.expectedArgs) > 0 {
-			cmdPrefix := []string{"unshare", "--pid", "--fork"}
+			cmdPrefix := []string{"setsid"}
 			expectedArgs = append(cmdPrefix, table.expectedArgs...)
 		} else {
 			expectedArgs = table.expectedArgs
