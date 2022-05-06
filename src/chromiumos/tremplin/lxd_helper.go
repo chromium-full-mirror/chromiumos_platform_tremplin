@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -116,16 +117,57 @@ func signalLxdFailure() {
 	}
 }
 
+func readIntoLog(c chan int, name string, r io.Reader) {
+	defer close(c)
+	buf := make([]byte, 1024)
+	for {
+		n, err := r.Read(buf)
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			log.Print(name, " ERROR: ", err)
+			return
+		}
+		if n < 1 {
+			continue
+		}
+		lines := strings.Split(string(buf[:n]), "\n")
+		nl := len(lines)
+		if nl > 1 && lines[nl-1] == "" {
+			lines = lines[:nl-1]
+		}
+		for _, line := range lines {
+			log.Print("lxd ", name, ": ", line)
+		}
+	}
+}
+
 // runLxd launches LXD and blocks until LXD exits. Will set l.process.
 func (l *lxdHelper) runLxd() error {
 	log.Printf("Running %q", strings.Join(lxdCmd, " "))
 	cmd := exec.Command(lxdCmd[0], lxdCmd[1:]...)
-	err := cmd.Start()
-	if err == nil {
-		log.Print("LXD started")
-		l.process = cmd.Process
-		return cmd.Wait()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	wc_stdout := make(chan int)
+	go readIntoLog(wc_stdout, "stdout", stdout)
+	wc_stderr := make(chan int)
+	go readIntoLog(wc_stderr, "stderr", stderr)
+	err = cmd.Start()
+	if err != nil {
+		return err
+	}
+	log.Print("LXD started")
+	l.process = cmd.Process
+	err = cmd.Wait()
+	<-wc_stdout
+	<-wc_stderr
 	return err
 }
 
