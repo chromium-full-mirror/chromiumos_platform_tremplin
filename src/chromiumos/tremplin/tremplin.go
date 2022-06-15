@@ -76,11 +76,12 @@ func init() {
 // getContainerName converts an LXD source path (/1.0/containers/foo) to a container name.
 func getContainerName(s string) (string, error) {
 	components := strings.Split(s, "/")
-	// Expected components are: "", "1.0", "containers", "<container name>".
+	// Expected components are: "", "1.0", "containers", "<container name>",
+	// or "", "1.0", "instances", "<container name>".
 	if len(components) != 4 {
 		return "", fmt.Errorf("invalid source path: %q", s)
 	}
-	if components[2] != "containers" {
+	if components[2] != "containers" && components[2] != "instances" {
 		return "", fmt.Errorf("source path is not a container: %q", s)
 	}
 	return components[3], nil
@@ -193,15 +194,12 @@ func (s *tremplinServer) subscribeToEvents() error {
 		}
 		log.Printf("Received lifecycle event, Action: %s, Source: %s",
 			unmarshaledLifecycle.Action, unmarshaledLifecycle.Source)
-		if unmarshaledLifecycle.Action == "container-shutdown" {
-			if !strings.HasPrefix(unmarshaledLifecycle.Source, "/1.0/containers/") {
-				log.Printf("Could not parse container name out of: %v",
-					unmarshaledLifecycle.Source)
+		if unmarshaledLifecycle.Action == "container-shutdown" || unmarshaledLifecycle.Action == "instance-shutdown" {
+			containerName, err := getContainerName(unmarshaledLifecycle.Source)
+			if err != nil {
+				log.Printf("Could not parse container name: %v", err)
 				return
 			}
-
-			containerName := strings.TrimPrefix(unmarshaledLifecycle.Source,
-				"/1.0/containers/")
 
 			// Notify cicerone that container has been shutdown.
 			_, err = s.listenerClient.ContainerShutdown(context.Background(), &pb.ContainerShutdownInfo{ContainerName: containerName})
