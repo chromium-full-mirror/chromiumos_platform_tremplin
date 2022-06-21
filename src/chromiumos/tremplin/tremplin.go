@@ -177,6 +177,7 @@ type tremplinServer struct {
 	features                    Features
 	ueventSocket                int
 	auditClient                 *libaudit.AuditClient
+	usbManager                  *containerUsbManager
 }
 
 // register for lifecycle events from lxd
@@ -194,7 +195,9 @@ func (s *tremplinServer) subscribeToEvents() error {
 		}
 		log.Printf("Received lifecycle event, Action: %s, Source: %s",
 			unmarshaledLifecycle.Action, unmarshaledLifecycle.Source)
-		if unmarshaledLifecycle.Action == "container-shutdown" || unmarshaledLifecycle.Action == "instance-shutdown" {
+
+		switch unmarshaledLifecycle.Action {
+		case "container-shutdown", "instance-shutdown":
 			containerName, err := getContainerName(unmarshaledLifecycle.Source)
 			if err != nil {
 				log.Printf("Could not parse container name: %v", err)
@@ -206,6 +209,25 @@ func (s *tremplinServer) subscribeToEvents() error {
 			if err != nil {
 				log.Printf("Could not notify ContainerShutdown of %s on host: %v", containerName, err)
 			}
+		case "container-deleted", "instance-deleted":
+			containerName, err := getContainerName(unmarshaledLifecycle.Source)
+			if err != nil {
+				log.Printf("Could not parse container name: %v", err)
+				return
+			}
+
+			// Detach USB devices from the container
+			m := s.usbManager
+			m.Lock()
+			for i := 1; i <= len(m.portInfo); i++ {
+				port := m.getPortInfo(i)
+				if port.attached && port.containerName == containerName {
+					log.Printf("USB port %d was attached to deleted container %q", i+1, containerName)
+					port.attached = false
+					port.containerName = ""
+				}
+			}
+			m.Unlock()
 		}
 	})
 
@@ -2283,7 +2305,56 @@ func (s *tremplinServer) GetDebugInfo(ctx context.Context, in *pb.GetDebugInfoRe
 
 func (s *tremplinServer) AttachUsbToContainer(ctx context.Context, in *pb.AttachUsbToContainerRequest) (*pb.AttachUsbToContainerResponse, error) {
 	log.Printf("Received AttachUsbToContainer RPC: %s %d", in.ContainerName, in.PortNum)
-	// TODO(b/229913205): Implement this method
+
+	m := s.usbManager
+	if m == nil || s.lxd == nil {
+		return &pb.AttachUsbToContainerResponse{
+			Status:        pb.AttachUsbToContainerResponse_FAILED,
+			FailureReason: "USB manager not ready",
+		}, nil
+	}
+
+	if in.PortNum < 1 || in.PortNum > int32(len(m.portInfo)) {
+		return &pb.AttachUsbToContainerResponse{
+			Status:        pb.AttachUsbToContainerResponse_FAILED,
+			FailureReason: fmt.Sprintf("Invalid port number %v", in.PortNum),
+		}, nil
+	}
+
+	_, _, err := s.lxd.GetContainer(in.ContainerName)
+	if err != nil {
+		return &pb.AttachUsbToContainerResponse{
+			Status:        pb.AttachUsbToContainerResponse_FAILED,
+			FailureReason: fmt.Sprintf("Failed to get container %q: %v", in.ContainerName, err),
+		}, nil
+	}
+
+	m.Lock()
+	defer m.Unlock()
+	portInfo := m.getPortInfo(int(in.PortNum))
+	if portInfo.attached {
+		err = portInfo.detachAllDevices(s.lxd)
+		if err != nil {
+			return &pb.AttachUsbToContainerResponse{
+				Status:        pb.AttachUsbToContainerResponse_FAILED,
+				FailureReason: fmt.Sprintf("Failed to detach USB devices from container %q: %v", portInfo.containerName, err),
+			}, nil
+		}
+	}
+
+	portInfo.attached = true
+	portInfo.containerName = in.ContainerName
+
+	err = portInfo.attachAllDevices(s.lxd)
+	if err != nil {
+		return &pb.AttachUsbToContainerResponse{
+			Status:        pb.AttachUsbToContainerResponse_FAILED,
+			FailureReason: fmt.Sprintf("Failed to attach USB devices to container %q: %v", in.ContainerName, err),
+		}, nil
+	}
+
+	// If a device was recently attached to the VM, tremplin may not know
+	// about it yet. Such devices will be processed in handleUsbUevent.
 
 	return &pb.AttachUsbToContainerResponse{
 		Status: pb.AttachUsbToContainerResponse_OK,
@@ -2292,7 +2363,37 @@ func (s *tremplinServer) AttachUsbToContainer(ctx context.Context, in *pb.Attach
 
 func (s *tremplinServer) DetachUsbFromContainer(ctx context.Context, in *pb.DetachUsbFromContainerRequest) (*pb.DetachUsbFromContainerResponse, error) {
 	log.Printf("Received DetachUsbFromContainer RPC: %d", in.PortNum)
-	// TODO(b/229913205): Implement this method
+
+	m := s.usbManager
+	if m == nil || s.lxd == nil {
+		return &pb.DetachUsbFromContainerResponse{
+			Status:        pb.DetachUsbFromContainerResponse_FAILED,
+			FailureReason: "USB manager not ready",
+		}, nil
+	}
+
+	if in.PortNum < 1 || in.PortNum > int32(len(m.portInfo)) {
+		return &pb.DetachUsbFromContainerResponse{
+			Status:        pb.DetachUsbFromContainerResponse_FAILED,
+			FailureReason: fmt.Sprintf("Invalid port number %v", in.PortNum),
+		}, nil
+	}
+
+	m.Lock()
+	defer m.Unlock()
+	portInfo := m.getPortInfo(int(in.PortNum))
+	if portInfo.attached {
+		err := portInfo.detachAllDevices(s.lxd)
+		if err != nil {
+			return &pb.DetachUsbFromContainerResponse{
+				Status:        pb.DetachUsbFromContainerResponse_FAILED,
+				FailureReason: fmt.Sprintf("Failed to detach USB devices from container %q: %v", portInfo.containerName, err),
+			}, nil
+		}
+	}
+
+	portInfo.attached = false
+	portInfo.containerName = ""
 
 	return &pb.DetachUsbFromContainerResponse{
 		Status: pb.DetachUsbFromContainerResponse_OK,

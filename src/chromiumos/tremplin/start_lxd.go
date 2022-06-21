@@ -39,6 +39,7 @@ const (
 	lxdDatabasePath        = "/mnt/stateful/lxd/database"
 	lxdNetworkPath         = "/mnt/stateful/lxd/networks"
 	lxdBackupPath          = ".old"
+	sysfsDir               = "/sys"
 )
 
 // Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
@@ -46,7 +47,6 @@ var validContainerDevices = []*regexp.Regexp{
 	regexp.MustCompile("^dri/.*$"),
 	regexp.MustCompile("^snd/[stc].*$"), // control, seq, timer
 	regexp.MustCompile("^snd/pcm.*p$"),  // playback only
-	regexp.MustCompile("^tty(ACM|USB)\\d+$"),
 	regexp.MustCompile("^kvm$"),
 	regexp.MustCompile("^wl0$"),
 }
@@ -249,42 +249,17 @@ func (s *tremplinServer) ueventListen() error {
 			continue
 		}
 
-		action, ok := uevent["ACTION"]
+		subsystem, ok := uevent["SUBSYSTEM"]
 		if !ok {
 			continue
 		}
 
-		devName, ok := uevent["DEVNAME"]
-		if !ok {
-			continue
+		if subsystem == "tty" || subsystem == "usb" {
+			err = s.handleUsbUevent(uevent)
 		}
-
-		if action != "add" && action != "remove" {
-			continue
-		}
-
-		if !validContainerDevice(devName) {
-			log.Print("Skipping device (not on allowlist): ", devName)
-			continue
-		}
-
-		profile, etag, err := s.lxd.GetProfile(defaultProfileName)
 		if err != nil {
-			log.Print("GetProfile failed: ", err)
+			log.Print("Failed to handle uevent: ", err)
 			continue
-		}
-
-		profilePut := profile.Writable()
-
-		if action == "add" {
-			addDevice(devName, profilePut.Devices)
-		} else if action == "remove" {
-			removeDevice(devName, profilePut.Devices)
-		}
-
-		err = s.lxd.UpdateProfile(defaultProfileName, profilePut, etag)
-		if err != nil {
-			log.Print("UpdateProfile failed: ", err)
 		}
 	}
 }
@@ -359,10 +334,6 @@ func initProfile(c lxd.ContainerServer) error {
 				"source": "/dev/net/tun",
 				"mode":   "0666",
 				"type":   "unix-char"
-			},
-			"usb": {
-				"type": "usb",
-				"mode": "0666"
 			}
 		}
 	}`), &defaultProfile); err != nil {
@@ -425,6 +396,12 @@ func updateRequiredDevices(c lxd.ContainerServer) error {
 }
 
 func (s *tremplinServer) initialSetup(c lxd.ContainerServer) error {
+	usbManager := new(containerUsbManager)
+	if err := initUsb(usbManager, sysfsDir); err != nil {
+		return fmt.Errorf("Failed to init USB manager: %w", err)
+	}
+	s.usbManager = usbManager
+
 	// Create the milestone file to bind-mount into containers.
 	// This must be done before initializing the profile as LXD now checks
 	// for the existence of storage volumes when the profile is set rather
