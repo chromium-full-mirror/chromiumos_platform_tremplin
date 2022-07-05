@@ -2272,3 +2272,21 @@ func (s *tremplinServer) GetDebugInfo(ctx context.Context, in *pb.GetDebugInfoRe
 		DebugInformation: str,
 	}, nil
 }
+
+func (s *tremplinServer) AttachUsbToContainer(ctx context.Context, in *pb.AttachUsbToContainerRequest) (*pb.AttachUsbToContainerResponse, error) {
+	log.Printf("Received AttachUsbToContainer RPC: %s %d", in.ContainerName, in.PortNum)
+	// TODO(b/229913205): Implement this method
+
+	return &pb.AttachUsbToContainerResponse{
+		Status: pb.AttachUsbToContainerResponse_OK,
+	}, nil
+}
+
+func (s *tremplinServer) DetachUsbFromContainer(ctx context.Context, in *pb.DetachUsbFromContainerRequest) (*pb.DetachUsbFromContainerResponse, error) {
+	log.Printf("Received DetachUsbFromContainer RPC: %d", in.PortNum)
+	// TODO(b/229913205): Implement this method
+
+	return &pb.DetachUsbFromContainerResponse{
+		Status: pb.DetachUsbFromContainerResponse_OK,
+	}, nil
+}
