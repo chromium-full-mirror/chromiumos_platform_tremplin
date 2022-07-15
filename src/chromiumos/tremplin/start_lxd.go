@@ -44,7 +44,8 @@ const (
 // Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
 var validContainerDevices = []*regexp.Regexp{
 	regexp.MustCompile("^dri/.*$"),
-	regexp.MustCompile("^snd/.*$"),
+	regexp.MustCompile("^snd/[stc].*$"), // control, seq, timer
+	regexp.MustCompile("^snd/pcm.*p$"),  // playback only
 	regexp.MustCompile("^tty(ACM|USB)\\d+$"),
 	regexp.MustCompile("^kvm$"),
 	regexp.MustCompile("^wl0$"),
@@ -148,13 +149,11 @@ func validContainerDevice(path string) bool {
 			return true
 		}
 	}
-
+	log.Printf("Ignoring device %v", path)
 	return false
 }
 
-func initDevices(devices map[string]map[string]string) {
-	log.Print("Scanning for initial set of devices")
-
+func addDevicesFromVm(devices map[string]map[string]string, filter func(path string) bool) {
 	filepath.Walk("/dev", func(path string, f os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -163,12 +162,16 @@ func initDevices(devices map[string]map[string]string) {
 			return nil
 		}
 		devName := strings.TrimPrefix(path, "/dev/")
-		if validContainerDevice(devName) {
+		if filter(devName) {
 			addDevice(devName, devices)
 		}
 		return nil
 	})
+}
 
+func initDevices(devices map[string]map[string]string) {
+	log.Print("Scanning for initial set of devices")
+	addDevicesFromVm(devices, validContainerDevice)
 	log.Print("Device scan complete")
 }
 

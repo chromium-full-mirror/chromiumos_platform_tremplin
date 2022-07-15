@@ -599,6 +599,14 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		}
 	}
 
+	if !in.DisableAudioCapture {
+		// find any pcm capture devices in the VM and create them in the container
+		micRegex := regexp.MustCompile("snd/pcmC.D.c$")
+		addDevicesFromVm(containerPut.Devices, func(path string) bool {
+			return micRegex.MatchString(path)
+		})
+	}
+
 	privilegeLevel := in.PrivilegeLevel
 	if !isPrivilegeLevelValid(privilegeLevel) {
 		req.Status = pb.ContainerStartProgress_FAILED
@@ -2288,5 +2296,13 @@ func (s *tremplinServer) DetachUsbFromContainer(ctx context.Context, in *pb.Deta
 
 	return &pb.DetachUsbFromContainerResponse{
 		Status: pb.DetachUsbFromContainerResponse_OK,
+	}, nil
+}
+
+func (s *tremplinServer) UpdateContainerDevices(ctx context.Context, in *pb.UpdateContainerDevicesRequest) (*pb.UpdateContainerDevicesResponse, error) {
+	log.Printf("Received UpdateContainerDevices RPC, not implemented")
+	// TODO(b/234662029): implementation
+	return &pb.UpdateContainerDevicesResponse{
+		Status: pb.UpdateContainerDevicesResponse_OK,
 	}, nil
 }
