@@ -345,6 +345,11 @@ func initProfile(c lxd.ContainerServer) error {
 				"path":   "/mnt/external",
 				"type":   "disk"
 			},
+			"fonts": {
+				"source": "/mnt/fonts",
+				"path":   "/usr/share/fonts/chromeos",
+				"type":   "disk"
+			},
 			"fuse": {
 				"source": "/dev/fuse",
 				"mode":   "0666",
