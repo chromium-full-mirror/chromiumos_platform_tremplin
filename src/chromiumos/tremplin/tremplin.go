@@ -299,9 +299,12 @@ func (s *tremplinServer) createSnapshot(containerName, snapshotName string) erro
 		return fmt.Errorf("failed to get container snapshot names: %v", err)
 	}
 
+	// LXD v4 returns a differently formatted name:
+	snapshotNameV4 := fmt.Sprintf("/1.0/instances/%s/snapshots/%s", containerName, snapshotName)
+
 	// Delete any existing snapshot with the same name.
 	for _, name := range names {
-		if name == snapshotName {
+		if name == snapshotName || name == snapshotNameV4 {
 			if err := s.deleteSnapshot(containerName, snapshotName); err != nil {
 				return err
 			}
