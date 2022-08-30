@@ -42,14 +42,17 @@ const (
 	sysfsDir               = "/sys"
 )
 
-// Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
-var validContainerDevices = []*regexp.Regexp{
-	regexp.MustCompile("^dri/.*$"),
-	regexp.MustCompile("^snd/[stc].*$"), // control, seq, timer
-	regexp.MustCompile("^snd/pcm.*p$"),  // playback only
-	regexp.MustCompile("^kvm$"),
-	regexp.MustCompile("^wl0$"),
-}
+var (
+	// Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
+	validContainerDevices = []*regexp.Regexp{
+		regexp.MustCompile("^dri/.*$"),
+		regexp.MustCompile("^snd/[stc].*$"), // control, seq, timer
+		regexp.MustCompile("^snd/pcm.*p$"),  // playback only
+		regexp.MustCompile("^kvm$"),
+		regexp.MustCompile("^wl0$"),
+	}
+	micRegex *regexp.Regexp = regexp.MustCompile("snd/pcmC.D.c$") // capture only
+)
 
 type nameField struct {
 	Name string
@@ -143,6 +146,18 @@ func removeDevice(devName string, devices map[string]map[string]string) error {
 	return nil
 }
 
+func removeFilteredDevices(devices map[string]map[string]string, filter func(path string) bool) int {
+	var count int
+	for path, _ := range devices {
+		if filter(path) {
+			log.Print("Removing device: ", path)
+			delete(devices, path)
+			count++
+		}
+	}
+	return count
+}
+
 func validContainerDevice(path string) bool {
 	for _, re := range validContainerDevices {
 		if re.MatchString(path) {
@@ -153,7 +168,8 @@ func validContainerDevice(path string) bool {
 	return false
 }
 
-func addDevicesFromVm(devices map[string]map[string]string, filter func(path string) bool) {
+func addFilteredDevices(devices map[string]map[string]string, filter func(path string) bool) int {
+	var count int
 	filepath.Walk("/dev", func(path string, f os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -163,15 +179,18 @@ func addDevicesFromVm(devices map[string]map[string]string, filter func(path str
 		}
 		devName := strings.TrimPrefix(path, "/dev/")
 		if filter(devName) {
+			log.Print("Adding device: ", path)
 			addDevice(devName, devices)
+			count++
 		}
 		return nil
 	})
+	return count
 }
 
 func initDevices(devices map[string]map[string]string) {
 	log.Print("Scanning for initial set of devices")
-	addDevicesFromVm(devices, validContainerDevice)
+	addFilteredDevices(devices, validContainerDevice)
 	log.Print("Device scan complete")
 }
 

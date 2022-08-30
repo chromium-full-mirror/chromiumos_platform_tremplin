@@ -626,8 +626,7 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 
 	if !in.DisableAudioCapture {
 		// find any pcm capture devices in the VM and create them in the container
-		micRegex := regexp.MustCompile("snd/pcmC.D.c$")
-		addDevicesFromVm(containerPut.Devices, func(path string) bool {
+		addFilteredDevices(containerPut.Devices, func(path string) bool {
 			return micRegex.MatchString(path)
 		})
 	}
@@ -2404,9 +2403,72 @@ func (s *tremplinServer) DetachUsbFromContainer(ctx context.Context, in *pb.Deta
 }
 
 func (s *tremplinServer) UpdateContainerDevices(ctx context.Context, in *pb.UpdateContainerDevicesRequest) (*pb.UpdateContainerDevicesResponse, error) {
-	log.Printf("Received UpdateContainerDevices RPC, not implemented")
-	// TODO(b/234662029): implementation
-	return &pb.UpdateContainerDevicesResponse{
-		Status: pb.UpdateContainerDevicesResponse_OK,
-	}, nil
+	log.Printf("Received UpdateContainerDevices RPC: %s", in.ContainerName)
+
+	response := &pb.UpdateContainerDevicesResponse{
+		Results: make(map[string]pb.UpdateContainerDevicesResponse_UpdateResult),
+	}
+	container, etag, err := s.lxd.GetContainer(in.ContainerName)
+	if container == nil {
+		response.Status = pb.UpdateContainerDevicesResponse_NO_SUCH_CONTAINER
+		return response, nil
+	}
+	containerPut := container.Writable()
+
+	for device, action := range in.Updates {
+		result := pb.UpdateContainerDevicesResponse_NO_SUCH_VM_DEVICE
+		switch device {
+		case strings.ToLower(pb.VmDevice_MICROPHONE.String()):
+			micFilter := func(path string) bool { return micRegex.MatchString(path) }
+			var count int
+			switch action {
+			case pb.VmDeviceAction_ENABLE:
+				count = addFilteredDevices(containerPut.Devices, micFilter)
+			case pb.VmDeviceAction_DISABLE:
+				count = removeFilteredDevices(containerPut.Devices, micFilter)
+			}
+			if count > 0 {
+				// The success value can be overturned if the subsequent container
+				// update fails.
+				result = pb.UpdateContainerDevicesResponse_SUCCESS
+			}
+
+		case strings.ToLower(pb.VmDevice_CAMERA.String()):
+			// This will change when there is camera support in the Termina VM.
+			result = pb.UpdateContainerDevicesResponse_NO_SUCH_VM_DEVICE
+		default:
+		}
+		response.Results[device] = result
+	}
+	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
+	doOp := func() {
+		if err != nil {
+			response.Status = pb.UpdateContainerDevicesResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to update container: %v", err)
+			return
+		}
+		if err = op.Wait(); err != nil {
+			response.Status = pb.UpdateContainerDevicesResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to wait for container update: %v", err)
+			return
+		}
+		opAPI := op.Get()
+		if opAPI.StatusCode != api.Success {
+			response.Status = pb.UpdateContainerDevicesResponse_FAILED
+			response.FailureReason = fmt.Sprintf("failed to update container devices: %v", err)
+			return
+		}
+	}
+	doOp()
+	if response.Status == pb.UpdateContainerDevicesResponse_FAILED {
+		// Flip any individual success results to UPDATE_FAILED
+		for k, v := range response.Results {
+			if v == pb.UpdateContainerDevicesResponse_SUCCESS {
+				response.Results[k] = pb.UpdateContainerDevicesResponse_UPDATE_FAILED
+			}
+		}
+	} else {
+		response.Status = pb.UpdateContainerDevicesResponse_OK
+	}
+	return response, err
 }
