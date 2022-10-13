@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -417,9 +417,13 @@ func updateRequiredDevices(c lxd.ContainerServer) error {
 func (s *tremplinServer) initialSetup(c lxd.ContainerServer) error {
 	usbManager := new(containerUsbManager)
 	if err := initUsb(usbManager, sysfsDir); err != nil {
-		return fmt.Errorf("Failed to init USB manager: %w", err)
+		// It is fine to keep going in this case. Some configurations
+		// like manatee don't have USB working but the guest VM and
+		// container can boot fine without it.
+		log.Printf("Failed to init USB manager: %v", err)
+	} else {
+		s.usbManager = usbManager
 	}
-	s.usbManager = usbManager
 
 	// Create the milestone file to bind-mount into containers.
 	// This must be done before initializing the profile as LXD now checks
