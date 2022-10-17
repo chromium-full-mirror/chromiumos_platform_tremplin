@@ -142,6 +142,7 @@ func (o *OsRelease) toProto() *pb.OsRelease {
 }
 
 func createAptSourceList(milestone int, osVersion string) string {
+	var list strings.Builder
 	if osVersion == "" {
 		// The VERSION_CODENAME tag is only required to be
 		// present on stable versions of debian. For
@@ -149,5 +150,12 @@ func createAptSourceList(milestone int, osVersion string) string {
 		// recent set of packages.
 		osVersion = "bullseye"
 	}
-	return fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersion)
+	list.WriteString(fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersion))
+
+	// On buster, we need the backports repo.
+	if osVersion == "buster" {
+		list.WriteString(fmt.Sprintf("deb https://deb.debian.org/debian %s-backports main\n", osVersion))
+	}
+
+	return list.String()
 }
