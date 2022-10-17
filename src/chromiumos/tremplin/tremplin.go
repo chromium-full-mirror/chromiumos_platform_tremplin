@@ -1243,7 +1243,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 	if err == nil {
 		response.OsRelease = osRelease.toProto()
 		if osRelease.id == "debian" {
-			err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, osRelease.versionCodename))
+			err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, osRelease.versionID, osRelease.versionCodename))
 		} // else unknown distro so do nothing.
 		if err != nil {
 			log.Print("Failed to update guest cros.list: ", err)

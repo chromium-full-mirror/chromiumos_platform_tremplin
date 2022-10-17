@@ -141,20 +141,19 @@ func (o *OsRelease) toProto() *pb.OsRelease {
 	}
 }
 
-func createAptSourceList(milestone int, osVersion string) string {
+func createAptSourceList(milestone int, osVersionId string, osVersionCodename string) string {
 	var list strings.Builder
-	if osVersion == "" {
-		// The VERSION_CODENAME tag is only required to be
-		// present on stable versions of debian. For
-		// testing/unstable/experimental, bullseye is the most
-		// recent set of packages.
-		osVersion = "bullseye"
+	if osVersionId == "" {
+		// The VERSION_ID tag is only present on stable versions of
+		// debian. For testing/unstable/experimental, bullseye is the
+		// most recent set of packages we ship.
+		osVersionCodename = "bullseye"
 	}
-	list.WriteString(fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersion))
+	list.WriteString(fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersionCodename))
 
 	// On buster, we need the backports repo.
-	if osVersion == "buster" {
-		list.WriteString(fmt.Sprintf("deb https://deb.debian.org/debian %s-backports main\n", osVersion))
+	if osVersionCodename == "buster" {
+		list.WriteString(fmt.Sprintf("deb https://deb.debian.org/debian %s-backports main\n", osVersionCodename))
 	}
 
 	return list.String()
