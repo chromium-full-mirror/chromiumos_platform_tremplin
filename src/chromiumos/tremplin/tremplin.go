@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -895,6 +895,13 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 		}
 	}
 
+	sendCreationProgress := func(req *pb.ContainerCreationProgress) {
+		_, err := s.listenerClient.UpdateCreateStatus(context.Background(), req)
+		if err != nil {
+			log.Printf("Could not update create status on host: %v", err)
+		}
+	}
+
 	// If a previous CreateContainer was interrupted delete the incomplete container and start fresh.
 	s.deleteContainer(createContainerName)
 
@@ -934,11 +941,8 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 					Status:        pb.ContainerCreationProgress_FAILED,
 					FailureReason: fmt.Sprintf("failed to import image: %v", err),
 				}
-				_, err := s.listenerClient.UpdateCreateStatus(context.Background(), req)
-				if err != nil {
-					log.Printf("Could not update create status on host: %v", err)
-					return
-				}
+				sendCreationProgress(req)
+				return
 			}
 			// If the image import was started successfully, register the normal
 			// operation handler.
@@ -948,57 +952,68 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 				log.Fatal("Failed to add create image operation handler: ", err)
 			}
 		}()
+	} else {
+		// On a slow network, connecting to a server and downloading alias data and image metadata can
+		// take a long time. We do this asynchronously.
+		go func() {
+			req := &pb.ContainerCreationProgress{
+				ContainerName: in.ContainerName,
+				Status:        pb.ContainerCreationProgress_UNKNOWN,
+			}
+			defer func() {
+				if req.Status != pb.ContainerCreationProgress_UNKNOWN {
+					sendCreationProgress(req)
+				}
+			}()
 
-		response.Status = pb.CreateContainerResponse_CREATING
+			log.Printf("Using image server")
+			imageServerUrl := strings.Replace(in.ImageServer, "%d", strconv.Itoa(s.milestone), 1)
 
-		return response, nil
+			imageServer, err := lxd.ConnectSimpleStreams(imageServerUrl, nil)
+			if err != nil {
+				req.Status = pb.ContainerCreationProgress_FAILED
+				req.FailureReason = fmt.Sprintf("failed to connect to simplestreams image server: %v", err)
+				return
+			}
+
+			alias, _, err := imageServer.GetImageAlias(in.ImageAlias)
+			if err != nil {
+				req.Status = pb.ContainerCreationProgress_FAILED
+				req.FailureReason = fmt.Sprintf("failed to get alias: %v", err)
+				return
+			}
+
+			log.Printf("Getting image")
+			image, _, err := imageServer.GetImage(alias.Target)
+			if err != nil {
+				req.Status = pb.ContainerCreationProgress_FAILED
+				req.FailureReason = fmt.Sprintf("failed to get image for alias: %v", err)
+				return
+			}
+
+			containersPost := api.ContainersPost{
+				Name: createContainerName,
+				Source: api.ContainerSource{
+					Type:  "image",
+					Alias: alias.Name,
+				},
+			}
+			log.Printf("Creating container from image")
+			op, err := s.lxd.CreateContainerFromImage(imageServer, *image, containersPost)
+			if err != nil {
+				req.Status = pb.ContainerCreationProgress_FAILED
+				req.FailureReason = fmt.Sprintf("failed to create container from image: %v", err)
+				return
+			}
+
+			_, err = op.AddHandler(func(op api.Operation) { s.handleCreateOperation(op, in.ContainerName) })
+			if err != nil {
+				req.Status = pb.ContainerCreationProgress_FAILED
+				req.FailureReason = fmt.Sprintf("failed to add create operation handler: %v", err)
+				log.Fatal("Failed to add create operation handler: ", err)
+			}
+		}()
 	}
-
-	log.Printf("Using image server")
-	imageServerUrl := strings.Replace(in.ImageServer, "%d", strconv.Itoa(s.milestone), 1)
-
-	imageServer, err := lxd.ConnectSimpleStreams(imageServerUrl, nil)
-	if err != nil {
-		response.Status = pb.CreateContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to connect to simplestreams image server: %v", err)
-		return response, nil
-	}
-
-	alias, _, err := imageServer.GetImageAlias(in.ImageAlias)
-	if err != nil {
-		response.Status = pb.CreateContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to get alias: %v", err)
-		return response, nil
-	}
-
-	log.Printf("Getting image")
-	image, _, err := imageServer.GetImage(alias.Target)
-	if err != nil {
-		response.Status = pb.CreateContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to get image for alias: %v", err)
-		return response, nil
-	}
-
-	containersPost := api.ContainersPost{
-		Name: createContainerName,
-		Source: api.ContainerSource{
-			Type:  "image",
-			Alias: alias.Name,
-		},
-	}
-	log.Printf("Creating container from image")
-	op, err := s.lxd.CreateContainerFromImage(imageServer, *image, containersPost)
-	if err != nil {
-		response.Status = pb.CreateContainerResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to create container from image: %v", err)
-		return response, nil
-	}
-
-	_, err = op.AddHandler(func(op api.Operation) { s.handleCreateOperation(op, in.ContainerName) })
-	if err != nil {
-		log.Fatal("Failed to add create operation handler: ", err)
-	}
-
 	response.Status = pb.CreateContainerResponse_CREATING
 
 	return response, nil
