@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -151,8 +151,8 @@ func createAptSourceList(milestone int, osVersionId string, osVersionCodename st
 	}
 	list.WriteString(fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersionCodename))
 
-	// On buster, we need the backports repo.
-	if osVersionCodename == "buster" {
+	// On buster and bullseye, we need the backports repo.
+	if osVersionCodename == "buster" || osVersionCodename == "bullseye" {
 		list.WriteString(fmt.Sprintf("deb https://deb.debian.org/debian %s-backports main\n", osVersionCodename))
 	}
 
