@@ -31,8 +31,8 @@ import (
 	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared"
 	"github.com/lxc/lxd/shared/api"
-	"github.com/lxc/lxd/shared/containerwriter"
 	"github.com/lxc/lxd/shared/idmap"
+	"github.com/lxc/lxd/shared/instancewriter"
 	"github.com/lxc/lxd/shared/ioprogress"
 	"github.com/lxc/lxd/shared/osarch"
 	"google.golang.org/grpc"
@@ -1712,13 +1712,13 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	bufferedExportFile := bufio.NewWriterSize(exportFile, exportWriterBufferSize)
 	tracker := &writeTracker{}
 	gzWriter := gzip.NewWriter(io.MultiWriter(bufferedExportFile, tracker))
-	ctw := containerwriter.NewContainerTarWriter(gzWriter, idmapSet)
+	ctw := instancewriter.NewInstanceTarWriter(gzWriter, idmapSet)
 
 	lastUpdate := time.Time{}
 	cancelled := false
 	fileWriter := func(path string, fi os.FileInfo, err error) error {
 		if !cancelled && err == nil {
-			err = ctw.WriteFile(len(streamingSnapshotDir)+1, path, fi)
+			err = ctw.WriteFile(exportFilePath, path, fi, false)
 			if err != nil {
 				return fmt.Errorf("failed to write file %s for container %s to output %s: %v", path, containerName, exportFilePath, err)
 			}
@@ -2074,7 +2074,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 		req.ProgressPercent = percent
 		req.ProgressSpeed = speed
 		switch stage {
-		case "create_container_from_image_unpack":
+		case "create_container_from_image_unpack", "create_instance_from_image_unpack":
 			req.Status = pb.ContainerImportProgress_IMPORTING_UNPACK
 		default:
 			log.Printf("Unknown CreateContainerFromImage stage: %v", stage)
