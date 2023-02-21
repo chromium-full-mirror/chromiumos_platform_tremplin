@@ -319,11 +319,6 @@ func initProfile(c lxd.ContainerServer) error {
 				"path":   "/dev/.cros_milestone",
 				"type":   "disk"
 			},
-			"host-ip": {
-				"source": "/run/host_ip",
-				"path":   "/dev/.host_ip",
-				"type":   "disk"
-			},
 			"shared": {
 				"source": "/mnt/shared",
 				"path":   "/mnt/chromeos",
