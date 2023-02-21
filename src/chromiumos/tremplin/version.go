@@ -145,9 +145,9 @@ func createAptSourceList(milestone int, osVersionId string, osVersionCodename st
 	var list strings.Builder
 	if osVersionId == "" {
 		// The VERSION_ID tag is only present on stable versions of
-		// debian. For testing/unstable/experimental, bullseye is the
+		// debian. For testing/unstable/experimental, bookworm is the
 		// most recent set of packages we ship.
-		osVersionCodename = "bullseye"
+		osVersionCodename = "bookworm"
 	}
 	list.WriteString(fmt.Sprintf("deb https://storage.googleapis.com/cros-packages/%d %s main\n", milestone, osVersionCodename))
 
