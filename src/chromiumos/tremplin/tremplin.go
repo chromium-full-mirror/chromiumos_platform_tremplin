@@ -1712,13 +1712,15 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	bufferedExportFile := bufio.NewWriterSize(exportFile, exportWriterBufferSize)
 	tracker := &writeTracker{}
 	gzWriter := gzip.NewWriter(io.MultiWriter(bufferedExportFile, tracker))
-	ctw := instancewriter.NewInstanceTarWriter(gzWriter, idmapSet)
+	ctw := instancewriter.NewInstanceTarWriter(gzWriter, nil)
 
 	lastUpdate := time.Time{}
 	cancelled := false
+	snapshotPathPrefix := streamingSnapshotDir + "/"
 	fileWriter := func(path string, fi os.FileInfo, err error) error {
 		if !cancelled && err == nil {
-			err = ctw.WriteFile(exportFilePath, path, fi, false)
+			pathInTarFile := strings.TrimPrefix(path, snapshotPathPrefix)
+			err = ctw.WriteFile(pathInTarFile, path, fi, false)
 			if err != nil {
 				return fmt.Errorf("failed to write file %s for container %s to output %s: %v", path, containerName, exportFilePath, err)
 			}
@@ -1986,25 +1988,22 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 
 	// Use a ProgressReader as a wrapper for importFile.
 	createArgs := &lxd.ImageCreateArgs{
-		MetaFile: &ioprogress.ProgressReader{
-			ReadCloser: importFile,
-			Tracker: &ioprogress.ProgressTracker{
-				Length: fi.Size(),
-				Handler: func(percent int64, speed int64) {
-					req.ProgressPercent = uint32(percent)
-					req.ProgressSpeed = uint64(speed)
-					req.Status = pb.ContainerImportProgress_IMPORTING_UPLOAD
-					_, err = s.listenerClient.UpdateImportStatus(context.Background(), req)
-					if err != nil {
-						log.Printf("Could not update CreateImage upload file status on host: %v", err)
-						return
-					}
-				},
-			},
+		MetaFile: importFile,
+		MetaName: filepath.Base(importFilename),
+		ProgressHandler: func(progress ioprogress.ProgressData) {
+			req.ProgressPercent = uint32(progress.Percentage)
+			req.ProgressSpeed = uint64(0)
+			req.Status = pb.ContainerImportProgress_IMPORTING_UPLOAD
+			_, err = s.listenerClient.UpdateImportStatus(context.Background(), req)
+			if err != nil {
+				log.Printf("Could not update CreateImage upload file status on host: %v", err)
+				return
+			}
 		},
+		Type: "container",
 	}
 	log.Printf("Uploading image from file %s, size=%d", importFilename, fi.Size())
-	op, err := s.lxd.CreateImage(api.ImagesPost{}, createArgs)
+	op, err := s.lxd.CreateImage(api.ImagesPost{Filename: createArgs.MetaName}, createArgs)
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to create image file %s: %v", importFilename, err)
@@ -2055,11 +2054,11 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 	imgInfo := api.Image{
 		Fingerprint: fingerprint,
 	}
-	reqInit := api.ContainersPost{
+	reqInit := api.InstancesPost{
 		Name: importContainerName,
 	}
 	log.Printf("Creating temp container %s from image", importContainerName)
-	opRemote, err := s.lxd.CreateContainerFromImage(s.lxd, imgInfo, reqInit)
+	opRemote, err := s.lxd.CreateInstanceFromImage(s.lxd, imgInfo, reqInit)
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("error creating container %s from image %s: %v", importContainerName, fingerprint, err)
