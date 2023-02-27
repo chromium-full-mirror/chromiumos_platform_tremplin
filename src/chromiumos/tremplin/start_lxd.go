@@ -324,11 +324,6 @@ func initProfile(c lxd.InstanceServer) error {
 				"path":   "/mnt/chromeos",
 				"type":   "disk"
 			},
-			"sshd_config": {
-				"source": "/usr/share/container_sshd_config",
-				"path":   "/dev/.ssh/sshd_config",
-				"type":   "disk"
-			},
 			"external": {
 				"source": "/mnt/external",
 				"path":   "/mnt/external",
@@ -665,7 +660,7 @@ func recoverContainer(name string) error {
 	// LXD will refuse to import a container if all its bindmounts don't exist,
 	// but we don't create the files (or know what to put in them) until later.
 	// We create empty files now, and then they get filled in later.
-	for _, b := range getBindMounts(name, "", "", "") {
+	for _, b := range getBindMounts(name, "") {
 		dir := filepath.Dir(b.source)
 		err := os.MkdirAll(dir, 0644)
 		if err != nil {

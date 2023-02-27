@@ -529,25 +529,13 @@ func (s *tremplinServer) remapContainer(container *api.Instance) (*api.Instance,
 	return s.lxd.GetInstance(container.Name)
 }
 
-func getBindMounts(containerName string, token string, hostKey string, containerKey string) []bindMount {
+func getBindMounts(containerName string, token string) []bindMount {
 	return []bindMount{
 		{
 			name:    "container_token",
 			content: token,
 			source:  fmt.Sprintf("/run/tokens/%s_token", containerName),
 			dest:    "/dev/.container_token",
-		},
-		{
-			name:    "ssh_authorized_keys",
-			content: hostKey,
-			source:  fmt.Sprintf("/run/sshd/%s/authorized_keys", containerName),
-			dest:    "/dev/.ssh/ssh_authorized_keys",
-		},
-		{
-			name:    "ssh_host_key",
-			content: containerKey,
-			source:  fmt.Sprintf("/run/sshd/%s/ssh_host_key", containerName),
-			dest:    "/dev/.ssh/ssh_host_key",
 		},
 	}
 }
@@ -598,20 +586,14 @@ func (s *tremplinServer) startContainer(container *api.Instance, etag string, in
 	// Clear out all existing devices for the container.
 	containerPut := container.Writable()
 	containerPut.Devices = map[string]map[string]string{}
-	err := os.MkdirAll(fmt.Sprintf("/run/sshd/%s", container.Name), 0644)
-	if err != nil {
-		req.Status = pb.ContainerStartProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to create ssh key dir: %v", err)
-		return
-	}
-	bindMounts := getBindMounts(container.Name, in.Token, in.HostPublicKey, in.ContainerPrivateKey)
+	bindMounts := getBindMounts(container.Name, in.Token)
 	for _, b := range bindMounts {
 		// Disregard bind mounts without values.
 		if b.content == "" {
 			continue
 		}
 
-		err = ioutil.WriteFile(b.source, []byte(b.content), 0644)
+		err := ioutil.WriteFile(b.source, []byte(b.content), 0644)
 		if err != nil {
 			req.Status = pb.ContainerStartProgress_FAILED
 			req.FailureReason = fmt.Sprintf("failed to write %q: %v", b.source, err)
