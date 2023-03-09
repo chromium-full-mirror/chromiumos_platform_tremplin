@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -109,7 +109,7 @@ func main() {
 	server.grpcServer.GracefulStop()
 
 	if server.lxd != nil {
-		containers, err := server.lxd.GetContainers()
+		containers, err := server.lxd.GetInstances("container")
 		if err != nil {
 			log.Fatal("Failed to get containers list for shutdown: ", err)
 		}

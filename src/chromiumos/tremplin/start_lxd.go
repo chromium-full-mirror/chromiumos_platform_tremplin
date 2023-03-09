@@ -63,7 +63,7 @@ type backupYaml struct {
 	Volume    nameField
 }
 
-func initStoragePool(c lxd.ContainerServer) error {
+func initStoragePool(c lxd.InstanceServer) error {
 	if _, _, err := c.GetStoragePool(defaultStoragePoolName); err == nil {
 		return nil
 	}
@@ -82,7 +82,7 @@ func initStoragePool(c lxd.ContainerServer) error {
 	return c.CreateStoragePool(pool)
 }
 
-func initNetwork(c lxd.ContainerServer, subnet string) error {
+func initNetwork(c lxd.InstanceServer, subnet string) error {
 	var defaultNetwork api.NetworksPost
 	if err := json.Unmarshal([]byte(fmt.Sprintf(`{
 		"name": "lxdbr0",
@@ -283,7 +283,7 @@ func (s *tremplinServer) ueventListen() error {
 	}
 }
 
-func initProfile(c lxd.ContainerServer) error {
+func initProfile(c lxd.InstanceServer) error {
 	var defaultProfile api.ProfilesPost
 	// NOTE: If you change idmap then you must also update the map in
 	// container_file_server.go (idToContainer and idFromContainer). Also, this
@@ -369,7 +369,7 @@ func initProfile(c lxd.ContainerServer) error {
 	return c.UpdateProfile(defaultProfileName, profilePut, etag)
 }
 
-func updateRequiredDevices(c lxd.ContainerServer) error {
+func updateRequiredDevices(c lxd.InstanceServer) error {
 	// LXD now checks by default for the existence of devices
 	// attached to the container when the profile attached to that
 	// container is updated. Because some of the devices are only
@@ -409,7 +409,7 @@ func updateRequiredDevices(c lxd.ContainerServer) error {
 	return nil
 }
 
-func (s *tremplinServer) initialSetup(c lxd.ContainerServer) error {
+func (s *tremplinServer) initialSetup(c lxd.InstanceServer) error {
 	usbManager := new(containerUsbManager)
 	if err := initUsb(usbManager, sysfsDir); err != nil {
 		// It is fine to keep going in this case. Some configurations

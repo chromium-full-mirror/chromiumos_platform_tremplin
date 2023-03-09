@@ -140,7 +140,7 @@ func unmarshalIdmapSets(name string, config map[string]string) (*idmap.IdmapSet,
 
 // idRemapRequired examines the last and next idmaps for a container and checks
 // if the container rootfs will require a remap when it next starts.
-func idRemapRequired(c *api.Container) (bool, error) {
+func idRemapRequired(c *api.Instance) (bool, error) {
 	lastSet, nextSet, err := unmarshalIdmapSets(c.Name, c.ExpandedConfig)
 
 	if err != nil {
@@ -166,7 +166,7 @@ func isPrivilegeLevelValid(privilegeLevel pb.StartContainerRequest_PrivilegeLeve
 
 // tremplinServer is used to implement the gRPC tremplin.Server.
 type tremplinServer struct {
-	lxd                         lxd.ContainerServer
+	lxd                         lxd.InstanceServer
 	subnet                      string
 	grpcServer                  *grpc.Server
 	listenerClient              pb.TremplinListenerClient
@@ -238,19 +238,19 @@ func (s *tremplinServer) subscribeToEvents() error {
 
 // execProgramAsync starts running a program in a container.
 func (s *tremplinServer) execProgramAsync(containerName string, args []string, stdout io.WriteCloser, stderr io.WriteCloser) (op lxd.Operation, err error) {
-	req := api.ContainerExecPost{
+	req := api.InstanceExecPost{
 		Command:     args,
 		WaitForWS:   true,
 		Interactive: false,
 	}
 
-	execArgs := &lxd.ContainerExecArgs{
+	execArgs := &lxd.InstanceExecArgs{
 		Stdin:  &stdioSink{},
 		Stdout: stdout,
 		Stderr: stderr,
 	}
 
-	return s.lxd.ExecContainer(containerName, req, execArgs)
+	return s.lxd.ExecInstance(containerName, req, execArgs)
 }
 
 // execProgram runs a program in a container to completion, capturing its
@@ -278,7 +278,7 @@ func (s *tremplinServer) execProgram(containerName string, args []string) (ret i
 
 // deleteSnapshot deletes a snapshot with snapshotName for containerName.
 func (s *tremplinServer) deleteSnapshot(containerName, snapshotName string) error {
-	op, err := s.lxd.DeleteContainerSnapshot(containerName, snapshotName)
+	op, err := s.lxd.DeleteInstanceSnapshot(containerName, snapshotName)
 	if err != nil {
 		return fmt.Errorf("failed to delete existing snapshot %s: %v", snapshotName, err)
 	}
@@ -296,7 +296,7 @@ func (s *tremplinServer) deleteSnapshot(containerName, snapshotName string) erro
 // createSnapshot creates a snapshot with snapshotName for containerName.
 // Any existing snapshot with the existing snapshotName is deleted first.
 func (s *tremplinServer) createSnapshot(containerName, snapshotName string) error {
-	names, err := s.lxd.GetContainerSnapshotNames(containerName)
+	names, err := s.lxd.GetInstanceSnapshotNames(containerName)
 	if err != nil {
 		return fmt.Errorf("failed to get container snapshot names: %v", err)
 	}
@@ -315,7 +315,7 @@ func (s *tremplinServer) createSnapshot(containerName, snapshotName string) erro
 		}
 	}
 
-	op, err := s.lxd.CreateContainerSnapshot(containerName, api.ContainerSnapshotsPost{
+	op, err := s.lxd.CreateInstanceSnapshot(containerName, api.InstanceSnapshotsPost{
 		Name:     snapshotName,
 		Stateful: false,
 	})
@@ -335,7 +335,7 @@ func (s *tremplinServer) createSnapshot(containerName, snapshotName string) erro
 
 // renameContainer renames the specified container from oldName to newName.
 func (s *tremplinServer) renameContainer(oldName, newName string) error {
-	op, err := s.lxd.RenameContainer(oldName, api.ContainerPost{Name: newName})
+	op, err := s.lxd.RenameInstance(oldName, api.InstancePost{Name: newName})
 	if err != nil {
 		return fmt.Errorf("error calling rename container %s to %s: %v", oldName, newName, err)
 	}
@@ -347,13 +347,13 @@ func (s *tremplinServer) renameContainer(oldName, newName string) error {
 
 // stopContainer stops the specified container.
 func (s *tremplinServer) stopContainer(containerName string, wait bool) (lxd.Operation, error) {
-	reqState := api.ContainerStatePut{
+	reqState := api.InstanceStatePut{
 		Action:  "stop",
 		Timeout: -1,
 		Force:   true,
 	}
 	log.Printf("stopContainer name: %v lxd: %v", containerName, s.lxd)
-	op, err := s.lxd.UpdateContainerState(containerName, reqState, "")
+	op, err := s.lxd.UpdateInstanceState(containerName, reqState, "")
 	if err != nil {
 		return nil, fmt.Errorf("error calling stop container %s: %v", containerName, err)
 	}
@@ -366,9 +366,9 @@ func (s *tremplinServer) stopContainer(containerName string, wait bool) (lxd.Ope
 	return nil, nil
 }
 
-// writeContainerFile writes content to fileName in containerName.
-func (s *tremplinServer) writeContainerFile(containerName, fileName, content string) error {
-	args := lxd.ContainerFileArgs{
+// writeInstanceFile writes content to fileName in containerName.
+func (s *tremplinServer) writeInstanceFile(containerName, fileName, content string) error {
+	args := lxd.InstanceFileArgs{
 		Content:   strings.NewReader(content),
 		UID:       0,
 		GID:       0,
@@ -376,7 +376,7 @@ func (s *tremplinServer) writeContainerFile(containerName, fileName, content str
 		Type:      "file",
 		WriteMode: "overwrite",
 	}
-	err := s.lxd.CreateContainerFile(containerName, fileName, args)
+	err := s.lxd.CreateInstanceFile(containerName, fileName, args)
 	if err != nil {
 		return fmt.Errorf("error writing file %s in container %s: %v", fileName, containerName, err)
 	}
@@ -385,8 +385,8 @@ func (s *tremplinServer) writeContainerFile(containerName, fileName, content str
 
 // getContainerWithRecovery resets the container if a previous operation such
 // as remap has failed.  Returns valid container, or nil if no container or recovery exists.
-func (s *tremplinServer) getContainerWithRecovery(containerName string) (*api.Container, string, error) {
-	container, etag, err := s.lxd.GetContainer(containerName)
+func (s *tremplinServer) getContainerWithRecovery(containerName string) (*api.Instance, string, error) {
+	container, etag, err := s.lxd.GetInstance(containerName)
 	if container != nil {
 		return container, etag, err
 	}
@@ -394,7 +394,7 @@ func (s *tremplinServer) getContainerWithRecovery(containerName string) (*api.Co
 	// If <container> doesn't exist, then restore it from <container>-crostini-recover if it exists.
 	recoverName := containerName + suffixRecover
 	log.Printf("Container %s not found, checking for recovery container %s", containerName, recoverName)
-	container, etag, err = s.lxd.GetContainer(recoverName)
+	container, etag, err = s.lxd.GetInstance(recoverName)
 	if container == nil {
 		log.Printf("Recovery container %s not found, this must be first setup", recoverName)
 		return container, etag, err
@@ -407,13 +407,13 @@ func (s *tremplinServer) getContainerWithRecovery(containerName string) (*api.Co
 
 	// Return updated container.
 	log.Printf("Recovery complete for %s", containerName)
-	return s.lxd.GetContainer(containerName)
+	return s.lxd.GetInstance(containerName)
 }
 
 // remapContainer copies a container and does remapping on the copy before swapping them over.
 // This process combined with using getContainerWithRecovery when first accessing the container
 // allows recovery if the remap process is stopped at any point.
-func (s *tremplinServer) remapContainer(container *api.Container) (*api.Container, string, error) {
+func (s *tremplinServer) remapContainer(container *api.Instance) (*api.Instance, string, error) {
 	recoverName := container.Name + suffixRecover
 	remapName := container.Name + suffixRemap
 
@@ -423,10 +423,10 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 	// It was previously being created for id remap, but never deleted.
 	// Ignore any errors deleting this snapshot.
 	log.Printf("Remap: delete old %s/%s snapshot if it exists", container.Name, shiftSnapshot)
-	snapshot, _, _ := s.lxd.GetContainerSnapshot(container.Name, shiftSnapshot)
+	snapshot, _, _ := s.lxd.GetInstanceSnapshot(container.Name, shiftSnapshot)
 	if snapshot != nil {
 		log.Printf("Remap: snapshot %s/%s exists, deleting", container.Name, shiftSnapshot)
-		op, err := s.lxd.DeleteContainerSnapshot(container.Name, shiftSnapshot)
+		op, err := s.lxd.DeleteInstanceSnapshot(container.Name, shiftSnapshot)
 		if err == nil {
 			op.Wait()
 			log.Printf("Remap: snapshot delete result: %v", op.Get())
@@ -437,8 +437,8 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 
 	// Delete <container>-crostini-remap if it exists.
 	log.Printf("Remap: delete old remap container %s if it exists", remapName)
-	remapConatiner, _, _ := s.lxd.GetContainer(remapName)
-	if remapConatiner != nil {
+	remapContainer, _, _ := s.lxd.GetInstance(remapName)
+	if remapContainer != nil {
 		log.Printf("Remap: Previous remap container %s exists, deleting", remapName)
 		err := s.deleteContainer(remapName)
 		if err != nil {
@@ -448,8 +448,8 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 
 	// Delete <container>-crostini-recover if it exists.
 	log.Printf("Remap: delete old recovery container %s if it exists", recoverName)
-	recoverConatiner, _, _ := s.lxd.GetContainer(recoverName)
-	if recoverConatiner != nil {
+	recoverContainer, _, _ := s.lxd.GetInstance(recoverName)
+	if recoverContainer != nil {
 		log.Printf("Remap: Previous recovery container %s exists, deleting", recoverName)
 		err := s.deleteContainer(recoverName)
 		if err != nil {
@@ -459,11 +459,11 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 
 	// Copy <container> to <container>-crostini-remap.
 	log.Printf("Remap: copy %s to %s", container.Name, remapName)
-	copyArgs := lxd.ContainerCopyArgs{
-		Name:          remapName,
-		ContainerOnly: true,
+	copyArgs := lxd.InstanceCopyArgs{
+		Name:         remapName,
+		InstanceOnly: true,
 	}
-	rop, err := s.lxd.CopyContainer(s.lxd, *container, &copyArgs)
+	rop, err := s.lxd.CopyInstance(s.lxd, *container, &copyArgs)
 	if err != nil {
 		return nil, "", fmt.Errorf("error calling copy container for remap %s: %v", remapName, err)
 	}
@@ -473,11 +473,11 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 
 	// Start <container>-crostini-remap to do the remapping.
 	log.Printf("Remap: start %s to do the remapping", remapName)
-	reqState := api.ContainerStatePut{
+	reqState := api.InstanceStatePut{
 		Action:  "start",
 		Timeout: -1,
 	}
-	op, err := s.lxd.UpdateContainerState(remapName, reqState, "")
+	op, err := s.lxd.UpdateInstanceState(remapName, reqState, "")
 	if err != nil {
 		return nil, "", fmt.Errorf("error calling start container for remap %s: %v", remapName, err)
 	}
@@ -498,7 +498,7 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 
 	// Update <container>-crostini-remap /etc/hostname to be <container>.
 	log.Printf("Remap: update %s /etc/hostname to %s", remapName, container.Name)
-	err = s.writeContainerFile(remapName, "/etc/hostname", container.Name)
+	err = s.writeInstanceFile(remapName, "/etc/hostname", container.Name)
 	if err != nil {
 		return nil, "", err
 	}
@@ -526,7 +526,7 @@ func (s *tremplinServer) remapContainer(container *api.Container) (*api.Containe
 
 	// Return updated container.
 	log.Printf("Remap: complete for %s", container.Name)
-	return s.lxd.GetContainer(container.Name)
+	return s.lxd.GetInstance(container.Name)
 }
 
 func getBindMounts(containerName string, token string, hostKey string, containerKey string) []bindMount {
@@ -554,7 +554,7 @@ func getBindMounts(containerName string, token string, hostKey string, container
 
 // startContainer performs pre-processing of the container and starts it.
 // This function is designed to be run async to allow StartContainer to return quickly.
-func (s *tremplinServer) startContainer(container *api.Container, etag string, in *pb.StartContainerRequest, remap bool) {
+func (s *tremplinServer) startContainer(container *api.Instance, etag string, in *pb.StartContainerRequest, remap bool) {
 	req := &pb.ContainerStartProgress{
 		ContainerName: container.Name,
 		Status:        pb.ContainerStartProgress_STARTING,
@@ -644,7 +644,7 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		containerPut.Config["security.privileged"] = strconv.FormatBool(privilegeLevel == pb.StartContainerRequest_PRIVILEGED)
 	}
 
-	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
+	op, err := s.lxd.UpdateInstance(container.Name, containerPut, etag)
 	if err != nil {
 		req.Status = pb.ContainerStartProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to set up devices: %v", err)
@@ -672,11 +672,11 @@ func (s *tremplinServer) startContainer(container *api.Container, etag string, i
 		}
 	}
 
-	reqState := api.ContainerStatePut{
+	reqState := api.InstanceStatePut{
 		Action:  "start",
 		Timeout: -1,
 	}
-	op, err = s.lxd.UpdateContainerState(container.Name, reqState, "")
+	op, err = s.lxd.UpdateInstanceState(container.Name, reqState, "")
 	if err != nil {
 		req.Status = pb.ContainerStartProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to start container: %v", err)
@@ -745,14 +745,14 @@ func (s *tremplinServer) handleCreateImageOperation(name string, op api.Operatio
 			break
 		}
 
-		containersPost := api.ContainersPost{
+		containersPost := api.InstancesPost{
 			Name: createContainerName,
-			Source: api.ContainerSource{
+			Source: api.InstanceSource{
 				Type:        "image",
 				Fingerprint: fingerprint,
 			},
 		}
-		op, err := s.lxd.CreateContainer(containersPost)
+		op, err := s.lxd.CreateInstance(containersPost)
 		if err != nil {
 			req.Status = pb.ContainerCreationProgress_FAILED
 			req.FailureReason = fmt.Sprintf("failed to create container from image: %v", err)
@@ -783,18 +783,18 @@ func (s *tremplinServer) handleCreateImageOperation(name string, op api.Operatio
 // setContainerMetadataKey sets the given key on the requested container
 // (i.e. isContainerMetadataKeySet will return true for it)
 func (s *tremplinServer) setContainerMetadataKey(containerName string, key string) error {
-	metadata, etag, err := s.lxd.GetContainerMetadata(containerName)
+	metadata, etag, err := s.lxd.GetInstanceMetadata(containerName)
 	if err != nil {
 		return err
 	}
 	metadata.Properties[key] = "true"
-	return s.lxd.SetContainerMetadata(containerName, *metadata, etag)
+	return s.lxd.UpdateInstanceMetadata(containerName, *metadata, etag)
 }
 
 // isContainerMetadataKeySet returns true/false if a given key is set/not set
 // on the specified container.
 func (s *tremplinServer) isContainerMetadataKeySet(containerName string, key string) (bool, error) {
-	metadata, _, err := s.lxd.GetContainerMetadata(containerName)
+	metadata, _, err := s.lxd.GetInstanceMetadata(containerName)
 	if err != nil {
 		return false, err
 	}
@@ -993,15 +993,15 @@ func (s *tremplinServer) CreateContainer(ctx context.Context, in *pb.CreateConta
 				return
 			}
 
-			containersPost := api.ContainersPost{
+			containersPost := api.InstancesPost{
 				Name: createContainerName,
-				Source: api.ContainerSource{
+				Source: api.InstanceSource{
 					Type:  "image",
 					Alias: alias.Name,
 				},
 			}
 			log.Printf("Creating container from image")
-			op, err := s.lxd.CreateContainerFromImage(imageServer, *image, containersPost)
+			op, err := s.lxd.CreateInstanceFromImage(imageServer, *image, containersPost)
 			if err != nil {
 				req.Status = pb.ContainerCreationProgress_FAILED
 				req.FailureReason = fmt.Sprintf("failed to create container from image: %v", err)
@@ -1034,7 +1034,7 @@ func (s *tremplinServer) DeleteContainer(ctx context.Context, in *pb.DeleteConta
 
 	response := &pb.DeleteContainerResponse{}
 
-	container, _, err := s.lxd.GetContainer(in.ContainerName)
+	container, _, err := s.lxd.GetInstance(in.ContainerName)
 	if container == nil {
 		response.Status = pb.DeleteContainerResponse_DOES_NOT_EXIST
 		return response, nil
@@ -1080,7 +1080,7 @@ func (s *tremplinServer) StopContainer(ctx context.Context, in *pb.StopContainer
 
 	response := &pb.StopContainerResponse{}
 
-	container, _, err := s.lxd.GetContainer(in.ContainerName)
+	container, _, err := s.lxd.GetInstance(in.ContainerName)
 	if container == nil {
 		response.Status = pb.StopContainerResponse_DOES_NOT_EXIST
 		return response, nil
@@ -1171,7 +1171,7 @@ func (s *tremplinServer) handleStopOperation(containerName string, op api.Operat
 }
 
 func (s *tremplinServer) startDeleteOperation(containerName string) (err error) {
-	op, err := s.lxd.DeleteContainer(containerName)
+	op, err := s.lxd.DeleteInstance(containerName)
 
 	if err != nil {
 		return err
@@ -1236,7 +1236,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		if privilegeLevel != pb.StartContainerRequest_UNCHANGED {
 			containerPut := container.Writable()
 			containerPut.Config["security.privileged"] = strconv.FormatBool(privilegeLevel == pb.StartContainerRequest_PRIVILEGED)
-			op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
+			op, err := s.lxd.UpdateInstance(container.Name, containerPut, etag)
 			if err != nil {
 				response.FailureReason = fmt.Sprintf("failed to update privilege level: %v", err)
 				return response, nil
@@ -1260,7 +1260,7 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 	if err == nil {
 		response.OsRelease = osRelease.toProto()
 		if osRelease.id == "debian" {
-			err = s.writeContainerFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, osRelease.versionID, osRelease.versionCodename))
+			err = s.writeInstanceFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, osRelease.versionID, osRelease.versionCodename))
 		} // else unknown distro so do nothing.
 		if err != nil {
 			log.Print("Failed to update guest cros.list: ", err)
@@ -1294,14 +1294,14 @@ func (s *tremplinServer) GetContainerUsername(ctx context.Context, in *pb.GetCon
 
 	response := &pb.GetContainerUsernameResponse{}
 
-	_, _, err := s.lxd.GetContainer(in.ContainerName)
+	_, _, err := s.lxd.GetInstance(in.ContainerName)
 	if err != nil {
 		response.Status = pb.GetContainerUsernameResponse_CONTAINER_NOT_FOUND
 		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
 		return response, nil
 	}
 
-	cfs := NewContainerFileServer(in.ContainerName)
+	cfs := NewInstanceFileServer(in.ContainerName)
 	pd, err := NewPasswdDatabase(cfs)
 	if err != nil {
 		response.Status = pb.GetContainerUsernameResponse_FAILED
@@ -1329,7 +1329,7 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 
 	response := &pb.SetUpUserResponse{}
 
-	cfs := NewContainerFileServer(in.ContainerName)
+	cfs := NewInstanceFileServer(in.ContainerName)
 	pd, err := NewPasswdDatabase(cfs)
 	if err != nil {
 		response.Status = pb.SetUpUserResponse_UNKNOWN
@@ -1401,7 +1401,7 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	}
 
 	// Enable loginctl linger for the target user.
-	if err := cfs.CreateContainerFile(lingerPath, lxd.ContainerFileArgs{
+	if err := cfs.CreateInstanceFile(lingerPath, lxd.InstanceFileArgs{
 		UID:  0,
 		GID:  0,
 		Mode: 0755,
@@ -1412,7 +1412,7 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 		return response, nil
 	}
 	userLingerPath := path.Join(lingerPath, response.Username)
-	if err := cfs.CreateContainerFile(userLingerPath, lxd.ContainerFileArgs{
+	if err := cfs.CreateInstanceFile(userLingerPath, lxd.InstanceFileArgs{
 		Content: nil,
 		UID:     0,
 		GID:     0,
@@ -1435,7 +1435,7 @@ func (s *tremplinServer) GetContainerInfo(ctx context.Context, in *pb.GetContain
 
 	response := &pb.GetContainerInfoResponse{}
 
-	c, _, err := s.lxd.GetContainerState(in.ContainerName)
+	c, _, err := s.lxd.GetInstanceState(in.ContainerName)
 	if err != nil {
 		response.Status = pb.GetContainerInfoResponse_NOT_FOUND
 		response.FailureReason = fmt.Sprintf("failed to find container: %v", err)
@@ -1491,7 +1491,7 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 
 	s.timezoneName = in.TimezoneName
 	for _, name := range in.ContainerNames {
-		container, _, err := s.lxd.GetContainer(name)
+		container, _, err := s.lxd.GetInstance(name)
 		if err != nil {
 			response.FailureReasons = append(response.FailureReasons, fmt.Sprintf("could not get container %s: %v", container.Name, err))
 			continue
@@ -1503,7 +1503,7 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 			response.Successes++
 			// Attempt to unset TZ env variable in case it was set earlier and is now incorrect.
 			delete(container.Config, "environment.TZ")
-			s.lxd.UpdateContainer(container.Name, container.Writable(), "")
+			s.lxd.UpdateInstance(container.Name, container.Writable(), "")
 			continue
 		}
 		errors = append(errors, fmt.Sprintf("setting timezone by name failed: (error: %v, return code: %d)", err, ret))
@@ -1513,7 +1513,7 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 			errors = append(errors, fmt.Sprintf("setting timezone by TZ variable failed: no POSIX TZ string provided"))
 		} else {
 			container.Config["environment.TZ"] = in.PosixTzString
-			operation, err := s.lxd.UpdateContainer(container.Name, container.Writable(), "")
+			operation, err := s.lxd.UpdateInstance(container.Name, container.Writable(), "")
 			if err == nil {
 				// UpdateContainer is relatively fast so no need to run asynchronously.
 				err := operation.Wait()
@@ -1636,7 +1636,7 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 	}()
 
 	// Get information (IdmapSets) about the snapshot.
-	snapshot, _, err := s.lxd.GetContainerSnapshot(containerName, backupSnapshot)
+	snapshot, _, err := s.lxd.GetInstanceSnapshot(containerName, backupSnapshot)
 	if err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to get container %s snapshot %s: %v", containerName, backupSnapshot, err)
@@ -1842,7 +1842,7 @@ func (s *tremplinServer) CancelExportContainer(ctx context.Context, in *pb.Cance
 // deleteContainer deletes a container if it exists.
 func (s *tremplinServer) deleteContainer(containerName string) error {
 	// Ignore any error from GetContainer.
-	c, _, _ := s.lxd.GetContainer(containerName)
+	c, _, _ := s.lxd.GetInstance(containerName)
 	if c == nil {
 		log.Printf("Ignoring request to delete non-existent container %s", containerName)
 		return nil
@@ -1859,7 +1859,7 @@ func (s *tremplinServer) deleteContainer(containerName string) error {
 			log.Printf("Could not notify ContainerShutdown of %s on host: %v", containerName, err)
 		}
 	}
-	op, err := s.lxd.DeleteContainer(containerName)
+	op, err := s.lxd.DeleteInstance(containerName)
 	if err != nil {
 		return fmt.Errorf("error calling delete container %s: %v", containerName, err)
 	}
@@ -2210,7 +2210,7 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 		return &pb.HostNetworkChangedResponse{}, nil
 	}
 
-	containers, err := s.lxd.GetContainers()
+	containers, err := s.lxd.GetInstances("container")
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get list of containers: %v", err)
 	}
@@ -2218,7 +2218,7 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 	for _, container := range containers {
 		// Each container's primary network interface needs to have its IPv6
 		// sysctl toggled to force checking for a new address.
-		c, _, err := s.lxd.GetContainerState(container.Name)
+		c, _, err := s.lxd.GetInstanceState(container.Name)
 		if err != nil {
 			log.Printf("Failed to get container state for %s: %v", container.Name, err)
 			continue
@@ -2227,7 +2227,7 @@ func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetw
 			continue
 		}
 
-		hasPublicIPv6Address := func(state api.ContainerStateNetwork) bool {
+		hasPublicIPv6Address := func(state api.InstanceStateNetwork) bool {
 			for _, addr := range state.Addresses {
 				if addr.Family != "inet6" {
 					continue
@@ -2317,7 +2317,7 @@ func (s *tremplinServer) GetDebugInfo(ctx context.Context, in *pb.GetDebugInfoRe
 
 	}
 
-	reader, err := s.lxd.GetContainerLogfile(defaultContainerName, "lxc.log")
+	reader, err := s.lxd.GetInstanceLogfile(defaultContainerName, "lxc.log")
 	if err != nil {
 		log.Printf("Error getting container log: %v", err)
 		return &pb.GetDebugInfoResponse{
@@ -2354,7 +2354,7 @@ func (s *tremplinServer) AttachUsbToContainer(ctx context.Context, in *pb.Attach
 		}, nil
 	}
 
-	_, _, err := s.lxd.GetContainer(in.ContainerName)
+	_, _, err := s.lxd.GetInstance(in.ContainerName)
 	if err != nil {
 		return &pb.AttachUsbToContainerResponse{
 			Status:        pb.AttachUsbToContainerResponse_FAILED,
@@ -2439,7 +2439,7 @@ func (s *tremplinServer) UpdateContainerDevices(ctx context.Context, in *pb.Upda
 	response := &pb.UpdateContainerDevicesResponse{
 		Results: make(map[string]pb.UpdateContainerDevicesResponse_UpdateResult),
 	}
-	container, etag, err := s.lxd.GetContainer(in.ContainerName)
+	container, etag, err := s.lxd.GetInstance(in.ContainerName)
 	if container == nil {
 		response.Status = pb.UpdateContainerDevicesResponse_NO_SUCH_CONTAINER
 		return response, nil
@@ -2471,7 +2471,7 @@ func (s *tremplinServer) UpdateContainerDevices(ctx context.Context, in *pb.Upda
 		}
 		response.Results[device] = result
 	}
-	op, err := s.lxd.UpdateContainer(container.Name, containerPut, etag)
+	op, err := s.lxd.UpdateInstance(container.Name, containerPut, etag)
 	doOp := func() {
 		if err != nil {
 			response.Status = pb.UpdateContainerDevicesResponse_FAILED

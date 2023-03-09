@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Copyright 2021 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,38 +15,38 @@ import (
 	"github.com/lxc/lxd/shared"
 )
 
-type ContainerFileServer interface {
-	GetContainerFile(path string) (content io.ReadCloser, resp *lxd.ContainerFileResponse, err error)
-	CreateContainerFile(path string, args lxd.ContainerFileArgs) (err error)
-	DeleteContainerFile(path string) (err error)
+type InstanceFileServer interface {
+	GetInstanceFile(path string) (content io.ReadCloser, resp *lxd.InstanceFileResponse, err error)
+	CreateInstanceFile(path string, args lxd.InstanceFileArgs) (err error)
+	DeleteInstanceFile(path string) (err error)
 }
 
-type FsContainerFileServer struct {
+type FsInstanceFileServer struct {
 	containerName string
 }
 
-var cfsOverride ContainerFileServer
+var cfsOverride InstanceFileServer
 
-// OverrideContainerFileServerForTesting overrides the container file server
-// that NewContainerFileServer will create, so you can inject a
+// OverrideInstanceFileServerForTesting overrides the container file server
+// that NewInstanceFileServer will create, so you can inject a
 // mock/fake/stub/etc for testing.
-func OverrideContainerFileServerForTesting(cfs ContainerFileServer) {
+func OverrideInstanceFileServerForTesting(cfs InstanceFileServer) {
 	cfsOverride = cfs
 }
 
-// NewContainerFileServer creates a new FsContainerFileServer (i.e. one backed
+// NewInstanceFileServer creates a new FsInstanceFileServer (i.e. one backed
 // by the filesystem).
-func NewContainerFileServer(containerName string) ContainerFileServer {
+func NewInstanceFileServer(containerName string) InstanceFileServer {
 	if cfsOverride != nil {
 		return cfsOverride
 	}
-	return &FsContainerFileServer{
+	return &FsInstanceFileServer{
 		containerName: containerName,
 	}
 }
 
 // mapIdToContainerNamespace maps a uid or gid from host number to container number.
-func (cfs *FsContainerFileServer) mapIdToContainerNamespace(id int) int {
+func (cfs *FsInstanceFileServer) mapIdToContainerNamespace(id int) int {
 	if id == PrimaryUserID || id == ChronosAccessID || id == AndroidRootID || id == AndroidEverybodyID {
 		return id
 	}
@@ -54,7 +54,7 @@ func (cfs *FsContainerFileServer) mapIdToContainerNamespace(id int) int {
 }
 
 // mapIdFromContainerNamespace maps a uid or gid from container number to host number.
-func (cfs *FsContainerFileServer) mapIdFromContainerNamespace(id int) int {
+func (cfs *FsInstanceFileServer) mapIdFromContainerNamespace(id int) int {
 	if id == PrimaryUserID || id == ChronosAccessID || id == AndroidRootID || id == AndroidEverybodyID {
 		return id
 	} else if id < 1000000 {
@@ -70,11 +70,11 @@ func (cfs *FsContainerFileServer) mapIdFromContainerNamespace(id int) int {
 
 // containerPathToHost maps a path from something relative to the container root
 // to an absolute path.
-func (cfs *FsContainerFileServer) containerPathToHost(path string) string {
+func (cfs *FsInstanceFileServer) containerPathToHost(path string) string {
 	return shared.VarPath("containers", cfs.containerName, "rootfs", path)
 }
 
-// GetContainerFile reads a file or directory from the container given a path
+// GetInstanceFile reads a file or directory from the container given a path
 // relative to the container root. If the file is a directory then content is
 // empty and resp.entries contains a list of files, otherwise content contains
 // the file contents and entries is empty. If you call this on anything other
@@ -83,7 +83,7 @@ func (cfs *FsContainerFileServer) containerPathToHost(path string) string {
 // not a FileMode, and different from what os.Stat gives you.
 // Note: GID and UID in resp are container IDs (e.g. a file owned by container
 // root will have UID 0, even though on the filesystem its UID will be 1000000).
-func (cfs *FsContainerFileServer) GetContainerFile(path string) (content io.ReadCloser, resp *lxd.ContainerFileResponse, err error) {
+func (cfs *FsInstanceFileServer) GetInstanceFile(path string) (content io.ReadCloser, resp *lxd.InstanceFileResponse, err error) {
 	p := cfs.containerPathToHost(path)
 	var s syscall.Stat_t
 	if err := syscall.Stat(p, &s); err != nil {
@@ -113,7 +113,7 @@ func (cfs *FsContainerFileServer) GetContainerFile(path string) (content io.Read
 			return nil, nil, err
 		}
 	}
-	resp = &lxd.ContainerFileResponse{
+	resp = &lxd.InstanceFileResponse{
 		UID:     int64(cfs.mapIdFromContainerNamespace(int(s.Uid))),
 		GID:     int64(cfs.mapIdFromContainerNamespace(int(s.Gid))),
 		Mode:    int(s.Mode),
@@ -123,7 +123,7 @@ func (cfs *FsContainerFileServer) GetContainerFile(path string) (content io.Read
 	return reader, resp, nil
 }
 
-// CreateContainerFile creates a file or directory at the given path relative to
+// CreateInstanceFile creates a file or directory at the given path relative to
 // the container root. if args.Type is "directory" it will create the directory
 // and any parents if needed, if args.Type is "file" then a file will be created
 // with the contents of args.Content, unless args.Content is nil, in which case
@@ -140,7 +140,7 @@ func (cfs *FsContainerFileServer) GetContainerFile(path string) (content io.Read
 // Note: if args.Type is "file" and args.Content != nil then args.WriteMode must
 // be "overwrite", anything else is unsupported. If args.Type is "directory" or
 // args.Type is "file" and args.Content is nil then args.WriteMode is ignored.
-func (cfs *FsContainerFileServer) CreateContainerFile(path string, args lxd.ContainerFileArgs) (err error) {
+func (cfs *FsInstanceFileServer) CreateInstanceFile(path string, args lxd.InstanceFileArgs) (err error) {
 	p := cfs.containerPathToHost(path)
 	mode := os.FileMode(args.Mode)
 	if args.Type == "directory" {
@@ -150,7 +150,7 @@ func (cfs *FsContainerFileServer) CreateContainerFile(path string, args lxd.Cont
 	} else if args.Type == "file" {
 		if args.Content != nil {
 			if args.WriteMode != "overwrite" {
-				log.Panic("Only overwrite supported by CreateContainerFile")
+				log.Panic("Only overwrite supported by CreateInstanceFile")
 			}
 			var b []byte
 			b, err = ioutil.ReadAll(args.Content)
@@ -168,7 +168,7 @@ func (cfs *FsContainerFileServer) CreateContainerFile(path string, args lxd.Cont
 			file.Close()
 		}
 	} else {
-		log.Panic("Only file and directory types are supported by CreateContainerFile")
+		log.Panic("Only file and directory types are supported by CreateInstanceFile")
 	}
 	if err := os.Chown(p, cfs.mapIdToContainerNamespace(int(args.UID)), cfs.mapIdToContainerNamespace(int(args.GID))); err != nil {
 		return err
@@ -179,9 +179,9 @@ func (cfs *FsContainerFileServer) CreateContainerFile(path string, args lxd.Cont
 	return os.Chmod(p, mode)
 }
 
-// DeleteContainerFile deletes a file or directory in the container at path
+// DeleteInstanceFile deletes a file or directory in the container at path
 // relative to the container root. If the target is a directory will also delete
 // everything within the directory,
-func (cfs *FsContainerFileServer) DeleteContainerFile(path string) (err error) {
+func (cfs *FsInstanceFileServer) DeleteInstanceFile(path string) (err error) {
 	return os.RemoveAll(cfs.containerPathToHost(path))
 }

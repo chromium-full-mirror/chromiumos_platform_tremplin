@@ -1,4 +1,4 @@
-// Copyright 2022 The ChromiumOS Authors.
+// Copyright 2022 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,51 +39,51 @@ type containerUsbPort struct {
 	containerName string
 }
 
-func (u *containerUsbPort) attachAllDevices(lxd lxd.ContainerServer) error {
-	container, etag, err := lxd.GetContainer(u.containerName)
+func (u *containerUsbPort) attachAllDevices(lxd lxd.InstanceServer) error {
+	container, etag, err := lxd.GetInstance(u.containerName)
 	if err != nil {
 		return fmt.Errorf("Failed to get container %q: %w", u.containerName, err)
 	}
 
-	containerPut := container.Writable()
+	instancePut := container.Writable()
 	for devName := range u.knownDevices {
-		err = addDevice(devName, containerPut.Devices)
+		err = addDevice(devName, instancePut.Devices)
 		if err != nil {
 			return fmt.Errorf("Failed to add device: %w", err)
 		}
 	}
 
-	op, err := lxd.UpdateContainer(u.containerName, containerPut, etag)
+	op, err := lxd.UpdateInstance(u.containerName, instancePut, etag)
 	if err != nil {
-		return fmt.Errorf("UpdateContainer failed %q: %w", u.containerName, err)
+		return fmt.Errorf("UpdateInstance failed %q: %w", u.containerName, err)
 	}
 	if err := op.Wait(); err != nil {
-		return fmt.Errorf("Wait for UpdateContainer failed %q: %w", u.containerName, err)
+		return fmt.Errorf("Wait for UpdateInstance failed %q: %w", u.containerName, err)
 	}
 
 	return nil
 }
 
-func (u *containerUsbPort) detachAllDevices(lxd lxd.ContainerServer) error {
-	container, etag, err := lxd.GetContainer(u.containerName)
+func (u *containerUsbPort) detachAllDevices(lxd lxd.InstanceServer) error {
+	container, etag, err := lxd.GetInstance(u.containerName)
 	if err != nil {
 		return fmt.Errorf("Failed to get container %q: %w", u.containerName, err)
 	}
 
-	containerPut := container.Writable()
+	instancePut := container.Writable()
 	for devName := range u.knownDevices {
-		err = removeDevice(devName, containerPut.Devices)
+		err = removeDevice(devName, instancePut.Devices)
 		if err != nil {
 			return fmt.Errorf("Failed to remove device: %w", err)
 		}
 	}
 
-	op, err := lxd.UpdateContainer(u.containerName, containerPut, etag)
+	op, err := lxd.UpdateInstance(u.containerName, instancePut, etag)
 	if err != nil {
-		return fmt.Errorf("UpdateContainer failed %q: %w", u.containerName, err)
+		return fmt.Errorf("UpdateInstance failed %q: %w", u.containerName, err)
 	}
 	if err := op.Wait(); err != nil {
-		return fmt.Errorf("Wait for UpdateContainer failed %q: %w", u.containerName, err)
+		return fmt.Errorf("Wait for UpdateInstance failed %q: %w", u.containerName, err)
 	}
 
 	return nil
@@ -260,31 +260,31 @@ func (s *tremplinServer) handleUsbUevent(uevent map[string]string) error {
 	portInfo := m.getPortInfo(port)
 
 	if portInfo.attached {
-		container, etag, err := s.lxd.GetContainer(portInfo.containerName)
+		container, etag, err := s.lxd.GetInstance(portInfo.containerName)
 		if err != nil {
 			return fmt.Errorf("Failed to get container %q: %w", portInfo.containerName, err)
 		}
 
-		containerPut := container.Writable()
+		instancePut := container.Writable()
 
 		if action == "add" {
-			err = addDevice(devName, containerPut.Devices)
+			err = addDevice(devName, instancePut.Devices)
 			if err != nil {
 				return fmt.Errorf("Failed to add device: %w", err)
 			}
 		} else if action == "remove" {
-			err = removeDevice(devName, containerPut.Devices)
+			err = removeDevice(devName, instancePut.Devices)
 			if err != nil {
 				return fmt.Errorf("Failed to remove device: %w", err)
 			}
 		}
 
-		op, err := s.lxd.UpdateContainer(portInfo.containerName, containerPut, etag)
+		op, err := s.lxd.UpdateInstance(portInfo.containerName, instancePut, etag)
 		if err != nil {
-			return fmt.Errorf("UpdateContainer failed %q: %w", portInfo.containerName, err)
+			return fmt.Errorf("UpdateInstance failed %q: %w", portInfo.containerName, err)
 		}
 		if err := op.Wait(); err != nil {
-			return fmt.Errorf("Wait for UpdateContainer failed %q: %w", portInfo.containerName, err)
+			return fmt.Errorf("Wait for UpdateInstance failed %q: %w", portInfo.containerName, err)
 		}
 	}
 

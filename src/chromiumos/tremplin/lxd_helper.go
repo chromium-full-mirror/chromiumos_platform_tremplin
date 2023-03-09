@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium OS Authors. All rights reserved.
+// Copyright 2020 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -172,7 +172,7 @@ func (l *lxdHelper) runLxd() error {
 }
 
 // lxdWaitready waits for LXD to be ready to handle requests.
-func lxdWaitready(ctx context.Context) (lxd.ContainerServer, error) {
+func lxdWaitready(ctx context.Context) (lxd.InstanceServer, error) {
 	var lastErr error
 	const lxdReadyTimeout = 2 * time.Minute
 	const lxdInterval = 500 * time.Millisecond
@@ -216,7 +216,7 @@ func lxdWaitready(ctx context.Context) (lxd.ContainerServer, error) {
 
 // LaunchLxd will return a connection to the LXD server, launching it first if
 // required.
-func (l *lxdHelper) LaunchLxd() (lxd.ContainerServer, error) {
+func (l *lxdHelper) LaunchLxd() (lxd.InstanceServer, error) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 	if l.shutdownSignal == nil {

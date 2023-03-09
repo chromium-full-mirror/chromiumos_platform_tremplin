@@ -71,10 +71,10 @@ type OsRelease struct {
 
 // getFileResolvingSymlinks will get the contents of a container file while
 // resolving any symlinks.
-func getFileResolvingSymlinks(lxd lxd.ContainerServer, name, p string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
+func getFileResolvingSymlinks(lxd lxd.InstanceServer, name, p string) (io.ReadCloser, *lxd.InstanceFileResponse, error) {
 	// include/linux/namei.h defines MAXSYMLINKS
 	for i := 0; i < 40; i++ {
-		r, resp, err := lxd.GetContainerFile(name, p)
+		r, resp, err := lxd.GetInstanceFile(name, p)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read guest path %q: %v", p, err)
 		}
@@ -94,7 +94,7 @@ func getFileResolvingSymlinks(lxd lxd.ContainerServer, name, p string) (io.ReadC
 }
 
 // getGuestOSRelease returns the os-release information for the given container.
-func getGuestOSRelease(lxd lxd.ContainerServer, name string) (*OsRelease, error) {
+func getGuestOSRelease(lxd lxd.InstanceServer, name string) (*OsRelease, error) {
 	r, _, err := getFileResolvingSymlinks(lxd, name, osReleasePrimaryPath)
 	if err != nil {
 		// Assume on error that the primary os-release path doesn't exist.

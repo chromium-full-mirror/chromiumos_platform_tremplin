@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,11 +22,11 @@ import (
 )
 
 type lxdStub struct {
-	lxd.ContainerServer
+	lxd.InstanceServer
 	operation *operationStub
 	execError error
 	osRelease string
-	lastExec  *api.ContainerExecPost
+	lastExec  *api.InstanceExecPost
 }
 
 type operationStub struct {
@@ -46,33 +46,33 @@ type containerFileServerStub struct {
 	lxd *lxdStub
 }
 
-func (s *lxdStub) ExecContainer(containerName string, exec api.ContainerExecPost, args *lxd.ContainerExecArgs) (lxd.Operation, error) {
+func (s *lxdStub) ExecInstance(containerName string, exec api.InstanceExecPost, args *lxd.InstanceExecArgs) (lxd.Operation, error) {
 	s.operation.out = args.Stdout
 	s.lastExec = &exec
 	args.Stdout.Write([]byte("In-progress message\n"))
 	return s.operation, s.execError
 }
 
-func (s *lxdStub) UpdateContainerState(containerName string, statePut api.ContainerStatePut, etag string) (lxd.Operation, error) {
+func (s *lxdStub) UpdateInstanceState(containerName string, statePut api.InstanceStatePut, etag string) (lxd.Operation, error) {
 	return s.operation, s.execError
 }
 
-func (s *lxdStub) GetContainerFile(containerName, path string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
+func (s *lxdStub) GetInstanceFile(containerName, path string) (io.ReadCloser, *lxd.InstanceFileResponse, error) {
 	reader := ioutil.NopCloser(strings.NewReader(s.osRelease))
-	resp := lxd.ContainerFileResponse{}
+	resp := lxd.InstanceFileResponse{}
 	return reader, &resp, nil
 }
 
-func (s *containerFileServerStub) GetContainerFile(path string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
-	return s.lxd.GetContainerFile("unused", path)
+func (s *containerFileServerStub) GetInstanceFile(path string) (io.ReadCloser, *lxd.InstanceFileResponse, error) {
+	return s.lxd.GetInstanceFile("unused", path)
 }
 
-func (s *containerFileServerStub) CreateContainerFile(path string, args lxd.ContainerFileArgs) (err error) {
+func (s *containerFileServerStub) CreateInstanceFile(path string, args lxd.InstanceFileArgs) (err error) {
 	log.Fatal("Not implemented")
 	return nil
 }
 
-func (s *containerFileServerStub) DeleteContainerFile(path string) (err error) {
+func (s *containerFileServerStub) DeleteInstanceFile(path string) (err error) {
 	log.Fatal("Not implemented")
 	return nil
 }
@@ -124,7 +124,7 @@ func makeStubs(returnCode float64, waitTime time.Duration, validator func(*pb.Up
 	}
 
 	cfs := &containerFileServerStub{}
-	OverrideContainerFileServerForTesting(cfs)
+	OverrideInstanceFileServerForTesting(cfs)
 
 	server := &tremplinServer{
 		lxd:                         lxd,

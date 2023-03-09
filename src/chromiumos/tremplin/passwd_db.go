@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,7 +31,7 @@ type PasswdDatabase struct {
 	group       shadow.GroupFile
 	groupShadow shadow.GroupShadowFile
 
-	cfs ContainerFileServer
+	cfs InstanceFileServer
 }
 
 func daysSinceEpoch() uint64 {
@@ -40,13 +40,13 @@ func daysSinceEpoch() uint64 {
 
 // NewPasswdDatabase reads/writes PasswdDatabase state in a container using the
 // using the provided container file server.
-func NewPasswdDatabase(cfs ContainerFileServer) (*PasswdDatabase, error) {
+func NewPasswdDatabase(cfs InstanceFileServer) (*PasswdDatabase, error) {
 	pd := &PasswdDatabase{
 		cfs: cfs,
 	}
 
-	loadContainerFile := func(path string, u encoding.TextUnmarshaler) error {
-		r, _, err := cfs.GetContainerFile(path)
+	loadInstanceFile := func(path string, u encoding.TextUnmarshaler) error {
+		r, _, err := cfs.GetInstanceFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to find %q: %v", path, err)
 		}
@@ -75,7 +75,7 @@ func NewPasswdDatabase(cfs ContainerFileServer) (*PasswdDatabase, error) {
 	}
 
 	for _, path := range paths {
-		if err := loadContainerFile(path.path, path.field); err != nil {
+		if err := loadInstanceFile(path.path, path.field); err != nil {
 			return nil, err
 		}
 	}
@@ -106,7 +106,7 @@ func (pd *PasswdDatabase) Save() error {
 		if err != nil {
 			return fmt.Errorf("failed to marshal for %s: %v", path, err)
 		}
-		if err := pd.cfs.CreateContainerFile(path, lxd.ContainerFileArgs{
+		if err := pd.cfs.CreateInstanceFile(path, lxd.InstanceFileArgs{
 			Content:   bytes.NewReader(b),
 			UID:       0,
 			GID:       gid,
@@ -216,7 +216,7 @@ func (pd *PasswdDatabase) EnsureUserInGroup(user, group string) error {
 }
 
 func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
-	r, s, err := pd.cfs.GetContainerFile(src)
+	r, s, err := pd.cfs.GetInstanceFile(src)
 	if err != nil {
 		return fmt.Errorf("failed to find %q: %v", src, err)
 	}
@@ -228,7 +228,7 @@ func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
 			return fmt.Errorf("failed to read in file %q: %v", src, err)
 		}
 
-		if err := pd.cfs.CreateContainerFile(dst, lxd.ContainerFileArgs{
+		if err := pd.cfs.CreateInstanceFile(dst, lxd.InstanceFileArgs{
 			Content:   bytes.NewReader(b),
 			UID:       int64(uid),
 			GID:       int64(uid),
@@ -239,7 +239,7 @@ func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
 			return fmt.Errorf("failed to write %s to container %q: %v", s.Type, dst, err)
 		}
 	case "directory":
-		if err := pd.cfs.CreateContainerFile(dst, lxd.ContainerFileArgs{
+		if err := pd.cfs.CreateInstanceFile(dst, lxd.InstanceFileArgs{
 			UID:       int64(uid),
 			GID:       int64(uid),
 			Mode:      s.Mode,
@@ -289,7 +289,7 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 		homedir = fmt.Sprintf("/home/%s", username)
 		shell = "/bin/bash"
 
-		_, s, err := pd.cfs.GetContainerFile(homedir)
+		_, s, err := pd.cfs.GetInstanceFile(homedir)
 
 		// If there's a non-directory file where the home
 		// directory needs to go, get rid of it. If there's
@@ -299,14 +299,14 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 		createHomeDir := !(err == nil && s.Type == "directory")
 
 		if removeFile {
-			err := pd.cfs.DeleteContainerFile(homedir)
+			err := pd.cfs.DeleteInstanceFile(homedir)
 			if err != nil {
 				return fmt.Errorf("%v type file at path %v must be removed to create home directory, but could not be: %v", s.Type, homedir, err)
 			}
 		}
 
 		if createHomeDir {
-			if err := pd.cfs.CreateContainerFile(homedir, lxd.ContainerFileArgs{
+			if err := pd.cfs.CreateInstanceFile(homedir, lxd.InstanceFileArgs{
 				UID:  int64(uid),
 				GID:  int64(uid),
 				Mode: 0755,
@@ -316,7 +316,7 @@ func (pd *PasswdDatabase) EnsureUserExists(username string, uid uint32, loginEna
 			}
 
 			// Copy home directory skeleton from /etc/skel if it exists.
-			_, s, err = pd.cfs.GetContainerFile("/etc/skel")
+			_, s, err = pd.cfs.GetInstanceFile("/etc/skel")
 			if err == nil && s.Type == "directory" {
 				if err := pd.recursiveCopy("/etc/skel", homedir, uid); err != nil {
 					return fmt.Errorf("failed to populate homedir: %v", err)

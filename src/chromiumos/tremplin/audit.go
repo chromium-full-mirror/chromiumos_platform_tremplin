@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,7 +29,7 @@ func (s *tremplinServer) UpdatePorts() error {
 	if s.lxd == nil {
 		return nil
 	}
-	containers, err := s.lxd.GetContainers()
+	containers, err := s.lxd.GetInstances("container")
 	if err != nil {
 		return fmt.Errorf("failed to get container list: %v", err)
 	}
@@ -39,7 +39,7 @@ func (s *tremplinServer) UpdatePorts() error {
 	}
 
 	for _, c := range containers {
-		state, _, err := s.lxd.GetContainerState(c.Name)
+		state, _, err := s.lxd.GetInstanceState(c.Name)
 		if err != nil {
 			return fmt.Errorf("failed to get container state for %q: %v", c.Name, err)
 		}

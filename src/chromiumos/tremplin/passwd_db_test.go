@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium OS Authors. All rights reserved.
+// Copyright 2019 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -225,12 +225,12 @@ func (s fakeSymlink) Metadata() fsMetadata {
 	return s.metadata
 }
 
-type fakeContainerFileServer struct {
+type fakeInstanceFileServer struct {
 	root fakeDirectory
 	t    *testing.T
 }
 
-func (s *fakeContainerFileServer) findEntry(filePath string, cwd *fakeDirectory) (fsEntry, error) {
+func (s *fakeInstanceFileServer) findEntry(filePath string, cwd *fakeDirectory) (fsEntry, error) {
 	splitPath := strings.Split(filePath, "/")
 
 	for i, component := range splitPath {
@@ -289,13 +289,13 @@ func (s *fakeContainerFileServer) findEntry(filePath string, cwd *fakeDirectory)
 	return cwd, nil
 }
 
-func (s *fakeContainerFileServer) GetContainerFile(filePath string) (io.ReadCloser, *lxd.ContainerFileResponse, error) {
+func (s *fakeInstanceFileServer) GetInstanceFile(filePath string) (io.ReadCloser, *lxd.InstanceFileResponse, error) {
 	entry, err := s.findEntry(filePath, &s.root)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	resp := &lxd.ContainerFileResponse{
+	resp := &lxd.InstanceFileResponse{
 		UID:  entry.Metadata().uid,
 		GID:  entry.Metadata().gid,
 		Mode: entry.Metadata().mode,
@@ -319,7 +319,7 @@ func (s *fakeContainerFileServer) GetContainerFile(filePath string) (io.ReadClos
 	return content, resp, nil
 }
 
-func (s *fakeContainerFileServer) CreateContainerFile(filePath string, args lxd.ContainerFileArgs) error {
+func (s *fakeInstanceFileServer) CreateInstanceFile(filePath string, args lxd.InstanceFileArgs) error {
 	dirPath, filename := path.Split(filePath)
 
 	entry, err := s.findEntry(dirPath, &s.root)
@@ -384,12 +384,12 @@ func (s *fakeContainerFileServer) CreateContainerFile(filePath string, args lxd.
 	return nil
 }
 
-func (s *fakeContainerFileServer) DeleteContainerFile(filePath string) error {
+func (s *fakeInstanceFileServer) DeleteInstanceFile(filePath string) error {
 	return errors.New("not yet implemented")
 }
 
-func NewFakeFileServer(t *testing.T) *fakeContainerFileServer {
-	return &fakeContainerFileServer{
+func NewFakeFileServer(t *testing.T) *fakeInstanceFileServer {
+	return &fakeInstanceFileServer{
 		t: t,
 		root: fakeDirectory{
 			metadata: fsMetadata{
@@ -478,8 +478,8 @@ func NewFakeFileServer(t *testing.T) *fakeContainerFileServer {
 	}
 }
 
-func (s *fakeContainerFileServer) assertContainerPath(filePath string, expect lxd.ContainerFileResponse) {
-	_, resp, err := s.GetContainerFile(filePath)
+func (s *fakeInstanceFileServer) assertContainerPath(filePath string, expect lxd.InstanceFileResponse) {
+	_, resp, err := s.GetInstanceFile(filePath)
 	if err != nil {
 		s.t.Fatalf("Failed to get %s: %v", filePath, err)
 	}
@@ -520,7 +520,7 @@ func TestFakeFileServer(t *testing.T) {
 	s := NewFakeFileServer(t)
 
 	// Check an existing file.
-	s.assertContainerPath("/etc/shadow", lxd.ContainerFileResponse{
+	s.assertContainerPath("/etc/shadow", lxd.InstanceFileResponse{
 		UID:  0,
 		GID:  42,
 		Mode: 0640,
@@ -529,7 +529,7 @@ func TestFakeFileServer(t *testing.T) {
 
 	// Create a directory and ensure it can be read back.
 	testDir := "/home/foo"
-	if err := s.CreateContainerFile(testDir, lxd.ContainerFileArgs{
+	if err := s.CreateInstanceFile(testDir, lxd.InstanceFileArgs{
 		Content:   bytes.NewReader([]byte("foo")),
 		UID:       int64(1000),
 		GID:       int64(1000),
@@ -540,7 +540,7 @@ func TestFakeFileServer(t *testing.T) {
 		t.Fatalf("failed to write directory to container: %v", err)
 	}
 
-	s.assertContainerPath(testDir, lxd.ContainerFileResponse{
+	s.assertContainerPath(testDir, lxd.InstanceFileResponse{
 		UID:     1000,
 		GID:     1000,
 		Mode:    0755,
@@ -601,7 +601,7 @@ func TestHomedirCreation(t *testing.T) {
 		t.Fatalf("Failed creating testuser: %v", err)
 	}
 
-	s.assertContainerPath("/home/testuser", lxd.ContainerFileResponse{
+	s.assertContainerPath("/home/testuser", lxd.InstanceFileResponse{
 		UID:  1000,
 		GID:  1000,
 		Mode: 0755,
@@ -614,7 +614,7 @@ func TestHomedirCreation(t *testing.T) {
 		t.Fatalf("Failed creating testuser2: %v", err)
 	}
 
-	_, _, err = s.GetContainerFile("/home/testuser2")
+	_, _, err = s.GetInstanceFile("/home/testuser2")
 	if err == nil {
 		t.Fatalf("Expected no homedir for testuser2")
 	}
