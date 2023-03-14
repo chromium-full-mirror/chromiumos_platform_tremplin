@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"io/ioutil"
 	"log"
@@ -57,6 +58,7 @@ const (
 	ChronosAccessID    = 1001
 	AndroidRootID      = 655360
 	AndroidEverybodyID = 665357
+	lxdSubuidStart     = 1000000
 
 	exportWriterBufferSize = 16 * 1024 * 1024 // 16Mib.
 
@@ -1684,10 +1686,25 @@ func (s *tremplinServer) exportContainer(containerName, exportPath string) {
 		filepath.Join(streamingSnapshotDir, "templates", ""),
 	}
 
-	// Unshift snapshots rootfs.
-	if err = idmapSet.UnshiftRootfs(rootfsDir, nil); err != nil {
+	var stat unix.Stat_t
+	err = unix.Stat(rootfsDir, &stat)
+	if err != nil {
 		req.Status = pb.ContainerExportProgress_FAILED
-		req.FailureReason = fmt.Sprintf("failed to unshift container %s snapshot %s: %v", containerName, backupSnapshot, err)
+		req.FailureReason = fmt.Sprintf("failed to stat container %s root directory: %v", containerName, err)
+		return
+	}
+
+	if stat.Uid >= lxdSubuidStart {
+		// Unshift the rootfs.
+		if err = idmapSet.UnshiftRootfs(rootfsDir, nil); err != nil {
+			req.Status = pb.ContainerExportProgress_FAILED
+			req.FailureReason = fmt.Sprintf("failed to unshift container %s snapshot %s: %v", containerName, backupSnapshot, err)
+			return
+		}
+	} else if stat.Uid == PrimaryUserID || stat.Uid == ChronosAccessID || stat.Uid == AndroidRootID || stat.Uid == AndroidEverybodyID {
+		// Unable to determine whether rootfs needs to be unshifted.
+		req.Status = pb.ContainerExportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("incorrect owner of container %s root directory: %v", containerName, stat.Uid)
 		return
 	}
 
