@@ -22,6 +22,7 @@ import (
 
 	lxd "github.com/lxc/lxd/client"
 	"github.com/lxc/lxd/shared/api"
+	"github.com/lxc/lxd/shared/version"
 	"golang.org/x/sys/unix"
 	yaml "gopkg.in/yaml.v2"
 )
@@ -63,23 +64,20 @@ type backupYaml struct {
 	Volume    nameField
 }
 
-func initStoragePool(c lxd.InstanceServer) error {
-	if _, _, err := c.GetStoragePool(defaultStoragePoolName); err == nil {
-		return nil
+func defaultStoragePool() api.StoragePoolsPost {
+	return api.StoragePoolsPost{
+		Name:           defaultStoragePoolName,
+		Driver:         "btrfs",
+		StoragePoolPut: api.StoragePoolPut{Config: map[string]string{"source": "/mnt/stateful/lxd/storage-pools/default"}},
 	}
-	// Assume on error that the pool doesn't exist.
-	var pool api.StoragePoolsPost
-	if err := json.Unmarshal([]byte(`{
-		"name": "default",
-		"driver": "btrfs",
-		"config": {
-			"source": "/mnt/stateful/lxd/storage-pools/default"
-		}
-	}`), &pool); err != nil {
-		return err
-	}
+}
 
-	return c.CreateStoragePool(pool)
+func initStoragePool(c lxd.InstanceServer) error {
+	if _, _, err := c.GetStoragePool(defaultStoragePoolName); err != nil {
+		log.Print("Failed to get storage pool: ", err)
+		return c.CreateStoragePool(defaultStoragePool())
+	}
+	return nil
 }
 
 func initNetwork(c lxd.InstanceServer, subnet string) error {
@@ -611,7 +609,7 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 		// container, or if there are any non-penguin containers. Since we made
 		// it in here we know we have exactly one container to recover called
 		// penguin (default name).
-		err := recoverContainer(defaultContainerName)
+		err := recoverContainer(c, defaultContainerName)
 		if err != nil {
 			// Our preferred approach failed, let's try loading from the old
 			// database as a fallback. So stop LXD, move the database back,
@@ -656,7 +654,7 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 }
 
 // recoverContainer recovers the named container a la `lxd import`.
-func recoverContainer(name string) error {
+func recoverContainer(c lxd.InstanceServer, name string) error {
 	// LXD will refuse to import a container if all its bindmounts don't exist,
 	// but we don't create the files (or know what to put in them) until later.
 	// We create empty files now, and then they get filled in later.
@@ -672,9 +670,48 @@ func recoverContainer(name string) error {
 		}
 		f.Close()
 	}
+
+	if lxdNewerThan("4.0.8") {
+		return recoverStoragePools(c)
+	}
+	// Old version of lxd, exec  "lxd import --force".
 	out, err := execCommand("lxd", "import", "--force", name)
 	if err != nil {
 		return fmt.Errorf("Error importing container. Stdout/err: %s. Error: %w", out, err)
+	}
+	return nil
+}
+
+// lxdNewerThan returns true if the current LXD version is "higher" than
+// |versionString|.
+func lxdNewerThan(versionString string) bool {
+	minVersion, err := version.NewDottedVersion(versionString)
+	if err != nil {
+		log.Print("Error parsing version: ", err)
+		return false
+	}
+	lxdVersion, err := version.NewDottedVersion(version.Version)
+	if err != nil {
+		log.Print("Error getting lxd version: ", err)
+		return false
+	}
+	return minVersion.Compare(lxdVersion) < 0
+}
+
+// recoverStoragePools sends a POST to /internal/recover/import requesting the
+// defaultStoragePool.
+func recoverStoragePools(c lxd.InstanceServer) error {
+	const recoverEndpoint = "/internal/recover/import"
+	log.Printf("Recovering containers via %v", recoverEndpoint)
+	type internalRecoverPost struct {
+		Pools []api.StoragePoolsPost `json:"pools" yaml:"pools"`
+	}
+	// We should have the default pool. Make sure we recover it.
+	reqRecover := internalRecoverPost{
+		Pools: []api.StoragePoolsPost{defaultStoragePool()},
+	}
+	if _, _, err := c.RawQuery("POST", recoverEndpoint, reqRecover, ""); err != nil {
+		return fmt.Errorf("Error posting to %v: %w", recoverEndpoint, err)
 	}
 	return nil
 }
