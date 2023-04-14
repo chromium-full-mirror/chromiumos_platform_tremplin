@@ -1451,9 +1451,7 @@ func (s *tremplinServer) GetContainerInfo(ctx context.Context, in *pb.GetContain
 	}
 
 	if response.Ipv4Address == 0 {
-		response.Status = pb.GetContainerInfoResponse_FAILED
-		response.FailureReason = fmt.Sprintf("failed to find ipv4 address for container %q", in.ContainerName)
-		return response, nil
+		log.Printf("Failed to find ipv4 address for container %q", in.ContainerName)
 	}
 
 	response.Status = pb.GetContainerInfoResponse_RUNNING
