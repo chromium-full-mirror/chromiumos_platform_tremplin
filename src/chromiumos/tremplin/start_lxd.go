@@ -671,7 +671,11 @@ func recoverContainer(c lxd.InstanceServer, name string) error {
 		f.Close()
 	}
 
-	if lxdNewerThan("4.0.8") {
+	newer, err := lxdNewerThan("4.0.8")
+	if err != nil {
+		return fmt.Errorf("Unable to determine lxd version: %w", err)
+	}
+	if newer {
 		return recoverStoragePools(c)
 	}
 	// Old version of lxd, exec  "lxd import --force".
@@ -684,18 +688,24 @@ func recoverContainer(c lxd.InstanceServer, name string) error {
 
 // lxdNewerThan returns true if the current LXD version is "higher" than
 // |versionString|.
-func lxdNewerThan(versionString string) bool {
+func lxdNewerThan(versionString string) (bool, error) {
 	minVersion, err := version.NewDottedVersion(versionString)
 	if err != nil {
 		log.Print("Error parsing version: ", err)
-		return false
+		return false, err
 	}
-	lxdVersion, err := version.NewDottedVersion(version.Version)
+	out, err := execCommand("lxd", "version")
 	if err != nil {
-		log.Print("Error getting lxd version: ", err)
-		return false
+		log.Print("Error calling 'lxd version': ", err)
+		return false, err
 	}
-	return minVersion.Compare(lxdVersion) < 0
+	log.Print("LXD reports version ", out)
+	lxdVersion, err := version.NewDottedVersion(strings.TrimSpace(out))
+	if err != nil {
+		log.Print("Error parsing lxd version: ", err)
+		return false, err
+	}
+	return minVersion.Compare(lxdVersion) < 0, nil
 }
 
 // recoverStoragePools sends a POST to /internal/recover/import requesting the
