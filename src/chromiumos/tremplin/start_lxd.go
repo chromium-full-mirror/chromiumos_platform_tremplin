@@ -28,19 +28,20 @@ import (
 )
 
 const (
-	defaultStoragePoolName = "default"
-	defaultContainerName   = "penguin"
-	defaultProfileName     = "default"
-	defaultNetworkName     = "lxdbr0"
-	defaultListenPort      = 8890
-	defaultHostPort        = "7778"
-	lxdConfPath            = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
-	milestonePath          = "/run/cros_milestone"    // path to the file containing the Chrome OS milestone
-	ueventBufferSize       = 4096                     // largest allowed uevent message size
-	lxdDatabasePath        = "/mnt/stateful/lxd/database"
-	lxdNetworkPath         = "/mnt/stateful/lxd/networks"
-	lxdBackupPath          = ".old"
-	sysfsDir               = "/sys"
+	defaultStoragePoolName        = "default"
+	defaultContainerName          = "penguin"
+	defaultProfileName            = "default"
+	defaultNetworkName            = "lxdbr0"
+	defaultListenPort             = 8890
+	defaultHostPort               = "7778"
+	lxdConfPath                   = "/mnt/stateful/lxd_conf" // path for holding LXD client configuration
+	milestonePath                 = "/run/cros_milestone"    // path to the file containing the Chrome OS milestone
+	ueventBufferSize              = 4096                     // largest allowed uevent message size
+	lxdDatabasePath               = "/mnt/stateful/lxd/database"
+	lxdNetworkPath                = "/mnt/stateful/lxd/networks"
+	lxdBackupPath                 = ".old"
+	lxdVersionLastWithOldRecovery = "4.0.8"
+	sysfsDir                      = "/sys"
 )
 
 var (
@@ -75,7 +76,18 @@ func defaultStoragePool() api.StoragePoolsPost {
 func initStoragePool(c lxd.InstanceServer) error {
 	if _, _, err := c.GetStoragePool(defaultStoragePoolName); err != nil {
 		log.Print("Failed to get storage pool: ", err)
-		return c.CreateStoragePool(defaultStoragePool())
+		err = c.CreateStoragePool(defaultStoragePool())
+		if err != nil {
+			log.Print("Failed to create storage pool: ", err)
+			newer, verr := lxdNewerThan(lxdVersionLastWithOldRecovery)
+			if verr != nil {
+				return fmt.Errorf("Unable to determine lxd version: %w", verr)
+			}
+			if newer {
+				return recoverStoragePools(c)
+			}
+			return err
+		}
 	}
 	return nil
 }
@@ -681,7 +693,7 @@ func recoverContainer(c lxd.InstanceServer, name string) error {
 		f.Close()
 	}
 
-	newer, err := lxdNewerThan("4.0.8")
+	newer, err := lxdNewerThan(lxdVersionLastWithOldRecovery)
 	if err != nil {
 		return fmt.Errorf("Unable to determine lxd version: %w", err)
 	}
@@ -701,7 +713,7 @@ func recoverContainer(c lxd.InstanceServer, name string) error {
 func lxdNewerThan(versionString string) (bool, error) {
 	minVersion, err := version.NewDottedVersion(versionString)
 	if err != nil {
-		log.Print("Error parsing version: ", err)
+		log.Print("Error parsing input version string: ", err)
 		return false, err
 	}
 	out, err := execCommand("lxd", "version")
