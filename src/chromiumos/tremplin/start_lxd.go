@@ -126,12 +126,22 @@ func addDevice(devName string, devices map[string]map[string]string) error {
 	major := unix.Major(stat.Rdev)
 	minor := unix.Minor(stat.Rdev)
 
+	var deviceType string
+	fileType := stat.Mode & unix.S_IFMT
+	if fileType == unix.S_IFCHR {
+		deviceType = "unix-char"
+	} else if fileType == unix.S_IFBLK {
+		deviceType = "unix-block"
+	} else {
+		return fmt.Errorf("Invalid device type %q", fileType)
+	}
+
 	devices[path] = map[string]string{
 		"path":  path,
 		"major": fmt.Sprintf("%v", major),
 		"minor": fmt.Sprintf("%v", minor),
 		"mode":  "0666",
-		"type":  "unix-char",
+		"type":  deviceType,
 	}
 	return nil
 }
@@ -271,7 +281,7 @@ func (s *tremplinServer) ueventListen() error {
 			continue
 		}
 
-		if subsystem == "tty" || subsystem == "usb" {
+		if subsystem == "block" || subsystem == "tty" || subsystem == "usb" {
 			err = s.handleUsbUevent(uevent)
 		}
 		if err != nil {
