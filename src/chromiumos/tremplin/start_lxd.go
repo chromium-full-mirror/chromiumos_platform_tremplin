@@ -315,7 +315,7 @@ func initProfile(c lxd.InstanceServer) error {
 			"boot.autostart": "false",
 			"boot.host_shutdown_timeout": "9",
 			"raw.idmap": "both 1000 1000\nboth 655360 655360\nboth 665357 665357\nboth 1001 1001",
-			"security.syscalls.blacklist": "keyctl errno 38",
+			"security.syscalls.deny": "keyctl errno 38",
 			"security.nesting": "true"
 		},
 		"devices": {
