@@ -7,7 +7,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -43,6 +42,76 @@ const (
 	lxdVersionLastWithOldRecovery = "4.0.8"
 	sysfsDir                      = "/sys"
 )
+
+const defaultNetworkTemplate = `
+config:
+  ipv4.address: "%s"
+  ipv4.dhcp.expiry: infinite
+  ipv6.address: none
+  raw.dnsmasq: |-
+    resolv-file=/run/resolv.conf
+    dhcp-authoritative
+    no-ping
+    addn-hosts=/etc/arc_host.conf
+managed: true
+name: lxdbr0
+type: bridge
+`
+
+const defaultProfileConfig = `
+config:
+  boot.autostart: "false"
+  boot.host_shutdown_timeout: "9"
+  raw.idmap: |-
+    both 1000 1000
+    both 655360 655360
+    both 665357 665357
+    both 1001 1001
+  security.nesting: "true"
+  security.syscalls.deny: |-
+    keyctl errno 38
+    io_uring_enter errno 38
+    io_uring_register errno 38
+    io_uring_setup errno 38
+devices:
+  cros_containers:
+    path: /opt/google/cros-containers
+    source: /opt/google/cros-containers
+    type: disk
+  cros_milestone:
+    path: /dev/.cros_milestone
+    source: /run/cros_milestone
+    type: disk
+  eth0:
+    nictype: bridged
+    parent: lxdbr0
+    type: nic
+  external:
+    path: /mnt/external
+    source: /mnt/external
+    type: disk
+  fonts:
+    path: /usr/share/fonts/chromeos
+    source: /mnt/fonts
+    type: disk
+  fuse:
+    mode: '0666'
+    source: /dev/fuse
+    type: unix-char
+  root:
+    path: /
+    pool: default
+    type: disk
+  shared:
+    path: /mnt/chromeos
+    source: /mnt/shared
+    type: disk
+  tun:
+    mode: '0666'
+    source: /dev/net/tun
+    type: unix-char
+name: default
+`
 
 var (
 	// Patterns of char devices in /dev that should be mapped into the container via the LXD device list.
@@ -94,17 +163,7 @@ func initStoragePool(c lxd.InstanceServer) error {
 
 func initNetwork(c lxd.InstanceServer, subnet string) error {
 	var defaultNetwork api.NetworksPost
-	if err := json.Unmarshal([]byte(fmt.Sprintf(`{
-		"name": "lxdbr0",
-		"type": "bridge",
-		"managed": true,
-		"config": {
-			"ipv4.address": "%s",
-			"ipv4.dhcp.expiry": "infinite",
-			"ipv6.address": "none",
-			"raw.dnsmasq": "resolv-file=/run/resolv.conf\ndhcp-authoritative\nno-ping\naddn-hosts=/etc/arc_host.conf"
-		}
-	}`, subnet)), &defaultNetwork); err != nil {
+	if err := yaml.Unmarshal([]byte(fmt.Sprintf(defaultNetworkTemplate, subnet)), &defaultNetwork); err != nil {
 		return err
 	}
 	network, etag, err := c.GetNetwork(defaultNetworkName)
@@ -309,63 +368,7 @@ func initProfile(c lxd.InstanceServer) error {
 	// container_file_server.go (idToContainer and idFromContainer). Also, this
 	// will trigger a remap so strongly considering migrating users to shiftfs
 	// beforehand.
-	if err := json.Unmarshal([]byte(`{
-		"name": "default",
-		"config": {
-			"boot.autostart": "false",
-			"boot.host_shutdown_timeout": "9",
-			"raw.idmap": "both 1000 1000\nboth 655360 655360\nboth 665357 665357\nboth 1001 1001",
-			"security.syscalls.deny": "keyctl errno 38\nio_uring_enter errno 38\nio_uring_register errno 38\nio_uring_setup errno 38",
-			"security.nesting": "true"
-		},
-		"devices": {
-			"root": {
-				"path": "/",
-				"pool": "default",
-				"type": "disk"
-			},
-			"eth0": {
-				"nictype": "bridged",
-				"parent":  "lxdbr0",
-				"type":    "nic"
-			},
-			"cros_containers": {
-				"source": "/opt/google/cros-containers",
-				"path":   "/opt/google/cros-containers",
-				"type":   "disk"
-			},
-			"cros_milestone": {
-				"source": "/run/cros_milestone",
-				"path":   "/dev/.cros_milestone",
-				"type":   "disk"
-			},
-			"shared": {
-				"source": "/mnt/shared",
-				"path":   "/mnt/chromeos",
-				"type":   "disk"
-			},
-			"external": {
-				"source": "/mnt/external",
-				"path":   "/mnt/external",
-				"type":   "disk"
-			},
-			"fonts": {
-				"source": "/mnt/fonts",
-				"path":   "/usr/share/fonts/chromeos",
-				"type":   "disk"
-			},
-			"fuse": {
-				"source": "/dev/fuse",
-				"mode":   "0666",
-				"type":   "unix-char"
-			},
-			"tun": {
-				"source": "/dev/net/tun",
-				"mode":   "0666",
-				"type":   "unix-char"
-			}
-		}
-	}`), &defaultProfile); err != nil {
+	if err := yaml.Unmarshal([]byte(defaultProfileConfig), &defaultProfile); err != nil {
 		return err
 	}
 
