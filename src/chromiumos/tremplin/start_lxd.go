@@ -69,7 +69,6 @@ config:
     both 1001 1001
   security.nesting: "true"
   security.syscalls.deny: |-
-    keyctl errno 38
     io_uring_enter errno 38
     io_uring_register errno 38
     io_uring_setup errno 38
