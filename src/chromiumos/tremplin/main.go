@@ -84,11 +84,6 @@ func main() {
 		log.Fatal("Failed to listen: ", err)
 	}
 
-	_, err = server.listenerClient.TremplinReady(context.Background(), &pb.TremplinStartupInfo{})
-	if err != nil {
-		log.Fatal("Failed to inform host that tremplin is ready: ", err)
-	}
-
 	// Start gRPC server in a different goroutine.
 	go func() {
 		log.Print("tremplin ready")
@@ -100,6 +95,11 @@ func main() {
 			}
 		}
 	}()
+
+	_, err = server.listenerClient.TremplinReady(context.Background(), &pb.TremplinStartupInfo{})
+	if err != nil {
+		log.Fatal("Failed to inform host that tremplin is ready: ", err)
+	}
 
 	// Shut down all containers on SIGPWR.
 	sigCh := make(chan os.Signal, 1)
