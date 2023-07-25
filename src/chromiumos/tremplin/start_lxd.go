@@ -68,10 +68,6 @@ config:
     both 665357 665357
     both 1001 1001
   security.nesting: "true"
-  security.syscalls.deny: |-
-    io_uring_enter errno 38
-    io_uring_register errno 38
-    io_uring_setup errno 38
 devices:
   cros_containers:
     path: /opt/google/cros-containers
