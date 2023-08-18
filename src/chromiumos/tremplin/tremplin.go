@@ -99,7 +99,7 @@ func getDownloadPercentage(progress string) (int32, error) {
 
 	downloadPercent, err := strconv.ParseInt(matches[2], 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("failed to convert download percent to int: %q", matches[2])
+		return 0, fmt.Errorf("failed to convert download percent in '%q' to int: %q", progress, matches[2])
 	}
 
 	// Count metadata download as 0% of the total, since the entire rootfs still
