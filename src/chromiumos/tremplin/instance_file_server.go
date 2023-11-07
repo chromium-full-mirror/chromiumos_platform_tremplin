@@ -23,6 +23,7 @@ type InstanceFileServer interface {
 
 type FsInstanceFileServer struct {
 	containerName string
+	needsRemap    bool
 }
 
 var cfsOverride InstanceFileServer
@@ -40,14 +41,26 @@ func NewInstanceFileServer(containerName string) InstanceFileServer {
 	if cfsOverride != nil {
 		return cfsOverride
 	}
+
+	// Old containers do not use idmapped mounts, so remapping is required.
+	needsRemap := false
+	var s syscall.Stat_t
+	if err := syscall.Stat(shared.VarPath("containers", containerName, "rootfs"), &s); err != nil {
+		log.Printf("Failed to check if remap needed for container %q, assuming no: %v", containerName, err)
+	} else {
+		if s.Uid >= lxdSubuidStart {
+			needsRemap = true
+		}
+	}
 	return &FsInstanceFileServer{
 		containerName: containerName,
+		needsRemap:    needsRemap,
 	}
 }
 
 // mapIdToContainerNamespace maps a uid or gid from host number to container number.
 func (cfs *FsInstanceFileServer) mapIdToContainerNamespace(id int) int {
-	if id == PrimaryUserID || id == ChronosAccessID || id == AndroidRootID || id == AndroidEverybodyID {
+	if !cfs.needsRemap || id == PrimaryUserID || id == ChronosAccessID || id == AndroidRootID || id == AndroidEverybodyID {
 		return id
 	}
 	return id + 1000000
@@ -55,7 +68,7 @@ func (cfs *FsInstanceFileServer) mapIdToContainerNamespace(id int) int {
 
 // mapIdFromContainerNamespace maps a uid or gid from container number to host number.
 func (cfs *FsInstanceFileServer) mapIdFromContainerNamespace(id int) int {
-	if id == PrimaryUserID || id == ChronosAccessID || id == AndroidRootID || id == AndroidEverybodyID {
+	if !cfs.needsRemap || id == PrimaryUserID || id == ChronosAccessID || id == AndroidRootID || id == AndroidEverybodyID {
 		return id
 	} else if id < 1000000 {
 		// Before we first start the container our IDs will all be unmapped
