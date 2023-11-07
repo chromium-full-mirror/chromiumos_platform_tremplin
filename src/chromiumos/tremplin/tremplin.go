@@ -367,7 +367,7 @@ func (s *tremplinServer) stopContainer(containerName string, wait bool) (lxd.Ope
 }
 
 // writeInstanceFile writes content to fileName in containerName.
-func (s *tremplinServer) writeInstanceFile(containerName, fileName, content string) error {
+func (s *tremplinServer) writeInstanceFile(cfs InstanceFileServer, fileName, content string) error {
 	args := lxd.InstanceFileArgs{
 		Content:   strings.NewReader(content),
 		UID:       0,
@@ -376,9 +376,9 @@ func (s *tremplinServer) writeInstanceFile(containerName, fileName, content stri
 		Type:      "file",
 		WriteMode: "overwrite",
 	}
-	err := s.lxd.CreateInstanceFile(containerName, fileName, args)
+	err := cfs.CreateInstanceFile(fileName, args)
 	if err != nil {
-		return fmt.Errorf("error writing file %s in container %s: %v", fileName, containerName, err)
+		return fmt.Errorf("error writing file %s: %v", fileName, err)
 	}
 	return nil
 }
@@ -498,7 +498,8 @@ func (s *tremplinServer) remapContainer(container *api.Instance) (*api.Instance,
 
 	// Update <container>-crostini-remap /etc/hostname to be <container>.
 	log.Printf("Remap: update %s /etc/hostname to %s", remapName, container.Name)
-	err = s.writeInstanceFile(remapName, "/etc/hostname", container.Name)
+	cfs := NewInstanceFileServer(container.Name)
+	err = s.writeInstanceFile(cfs, "/etc/hostname", container.Name)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1238,11 +1239,12 @@ func (s *tremplinServer) StartContainer(ctx context.Context, in *pb.StartContain
 		return response, nil
 	}
 
-	osRelease, err := getGuestOSRelease(s.lxd, container.Name)
+	cfs := NewInstanceFileServer(in.ContainerName)
+	osRelease, err := getGuestOSRelease(cfs, container.Name)
 	if err == nil {
 		response.OsRelease = osRelease.toProto()
 		if osRelease.id == "debian" {
-			err = s.writeInstanceFile(container.Name, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, osRelease.versionID, osRelease.versionCodename))
+			err = s.writeInstanceFile(cfs, "/etc/apt/sources.list.d/cros.list", createAptSourceList(s.milestone, osRelease.versionID, osRelease.versionCodename))
 		} // else unknown distro so do nothing.
 		if err != nil {
 			log.Print("Failed to update guest cros.list: ", err)

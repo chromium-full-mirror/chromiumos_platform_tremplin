@@ -43,7 +43,8 @@ func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersi
 		return pb.UpgradeContainerResponse_ALREADY_RUNNING, fmt.Sprintf("Upgrade already in progress on %s", containerName)
 	}
 
-	osRelease, err := getGuestOSRelease(s.lxd, containerName)
+	cfs := NewInstanceFileServer(containerName)
+	osRelease, err := getGuestOSRelease(cfs, containerName)
 	if err != nil {
 		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Failed to read /etc/os-release: %v", err)
 	}
