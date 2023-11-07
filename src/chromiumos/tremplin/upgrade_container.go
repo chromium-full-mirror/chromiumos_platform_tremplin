@@ -34,7 +34,8 @@ func (s *tremplinServer) shutDownContainer(containerName string) error {
 // startUpgradeContainer launches an async container upgrade job.
 func (s *tremplinServer) startUpgradeContainer(containerName string, targetVersion pb.UpgradeContainerRequest_Version) (pb.UpgradeContainerResponse_Status, string) {
 	if targetVersion != pb.UpgradeContainerRequest_DEBIAN_BUSTER &&
-		targetVersion != pb.UpgradeContainerRequest_DEBIAN_BULLSEYE {
+		targetVersion != pb.UpgradeContainerRequest_DEBIAN_BULLSEYE &&
+		targetVersion != pb.UpgradeContainerRequest_DEBIAN_BOOKWORM {
 		return pb.UpgradeContainerResponse_NOT_SUPPORTED, fmt.Sprintf("Upgrade to %s not supported", targetVersion)
 	}
 
