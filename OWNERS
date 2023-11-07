@@ -1,3 +1,1 @@
-davidmunro@google.com
-joelhockey@chromium.org
-nverne@chromium.org
+include chromiumos/owners:v1:/guestos/OWNERS.crostini
