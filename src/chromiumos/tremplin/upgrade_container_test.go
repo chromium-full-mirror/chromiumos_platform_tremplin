@@ -123,7 +123,7 @@ func makeStubs(returnCode float64, waitTime time.Duration, validator func(*pb.Up
 		osRelease: makeOsRelease("stretch"),
 	}
 
-	cfs := &containerFileServerStub{}
+	cfs := &containerFileServerStub{lxd: lxd}
 	OverrideInstanceFileServerForTesting(cfs)
 
 	server := &tremplinServer{
@@ -228,6 +228,9 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 		{"stretch", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BUSTER", "DEBIAN_BULLSEYE"}},
 		{"buster", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BULLSEYE"}},
 		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_BULLSEYE, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath}},
+		{"buster", pb.UpgradeContainerRequest_DEBIAN_BOOKWORM, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BULLSEYE", "DEBIAN_BOOKWORM"}},
+		{"bullseye", pb.UpgradeContainerRequest_DEBIAN_BOOKWORM, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath, "DEBIAN_BOOKWORM"}},
+		{"bookworm", pb.UpgradeContainerRequest_DEBIAN_BOOKWORM, pb.UpgradeContainerResponse_STARTED, []string{upgradeScriptPath}},
 	}
 
 	for _, table := range tables {
