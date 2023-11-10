@@ -129,6 +129,22 @@ type backupYaml struct {
 	Volume    nameField
 }
 
+func initServer(c lxd.InstanceServer) error {
+	server, etag, err := c.GetServer()
+	if err != nil {
+		return err
+	}
+
+	serverPut := server.Writable()
+	serverPut.Config["core.shutdown_timeout"] = "0"
+
+	if err := c.UpdateServer(serverPut, etag); err != nil {
+		log.Print("Failed to update server: ", err)
+		return err
+	}
+	return nil
+}
+
 func defaultStoragePool() api.StoragePoolsPost {
 	return api.StoragePoolsPost{
 		Name:           defaultStoragePoolName,
@@ -441,6 +457,10 @@ func (s *tremplinServer) initialSetup(c lxd.InstanceServer) error {
 
 	if err := ioutil.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
 		return fmt.Errorf("could not write milestone file: %v", err)
+	}
+
+	if err := initServer(c); err != nil {
+		return fmt.Errorf("Failed to init server: %w", err)
 	}
 
 	if err := updateRequiredDevices(c); err != nil {
