@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"log"
 	"os"
 	"os/exec"
@@ -73,4 +74,18 @@ func ensureDirectoryDoesntExist(dirPath string) error {
 		return os.RemoveAll(dirPath)
 	}
 	return nil
+}
+
+// getStatefulFreeSpace returns the free space in bytes of the stateful partition as reported by statfs(2).
+func getStatefulFreeSpace() (uint64, error) {
+	var statfs unix.Statfs_t
+	if err := unix.Statfs("/mnt/stateful", &statfs); err != nil {
+		return 0, fmt.Errorf("statfs failed: %w", err)
+	}
+
+	if statfs.Bsize < 0 {
+		return 0, fmt.Errorf("bsize %d is less than 0", statfs.Bsize)
+	}
+
+	return uint64(statfs.Bsize) * statfs.Bavail, nil
 }

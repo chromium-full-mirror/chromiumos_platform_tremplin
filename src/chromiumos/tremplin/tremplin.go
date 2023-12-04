@@ -1851,7 +1851,7 @@ func (s *tremplinServer) deleteContainer(containerName string) error {
 	return nil
 }
 
-func (s *tremplinServer) importContainer(containerName, importPath string, availableDiskSpaceBytes uint64) {
+func (s *tremplinServer) importContainer(containerName, importPath string) {
 	req := &pb.ContainerImportProgress{
 		ContainerName: containerName,
 	}
@@ -1935,47 +1935,53 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 		return
 	}
 
-	if availableDiskSpaceBytes != 0 {
-		// Read the gzip ISIZE field (uncompressed input size) which is stored as the
-		// last 4 bytes (possibly truncated) little-endian.
-		if fi.Size() < 4 {
-			req.Status = pb.ContainerImportProgress_FAILED
-			req.FailureReason = fmt.Sprintf("unexpected file size %v for %s", fi.Size(), importFilename)
-			log.Printf(req.FailureReason)
-			return
-		}
-		buf := make([]byte, 4)
-		if read, err := importFile.ReadAt(buf, fi.Size()-4); read != 4 || err != nil {
-			req.Status = pb.ContainerImportProgress_FAILED
-			req.FailureReason = fmt.Sprintf("failed to read isize from %s read %v bytes: %v", importFilename, read, err)
-			log.Printf(req.FailureReason)
-			return
-		}
-		compressedSize := uint64(fi.Size())
-		isize := uint64(binary.LittleEndian.Uint32(buf))
+	availableDiskSpaceBytes, err := getStatefulFreeSpace()
+	if err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to get stateful partition space: %v", err)
+		log.Printf(req.FailureReason)
+		return
+	}
 
-		// ISIZE is only 32-bits and is not accurate if the uncompressed size
-		// is greater than ~4G. Assuming that the uncompressed file must be
-		// larger than compressed, we can estimate minUncompressedSize by
-		// repeatedly adding 4G to ISIZE until it is larger than compressed.
-		// The same outcome can be achieved without introducing loops by oring
-		// the top 32 bits of the compressed size with the isize, and rounding
-		// up by 1<<32 once if necessary.
-		minUncompressedSize := (compressedSize &^ 0xffffffff) | isize
-		if minUncompressedSize < compressedSize {
-			minUncompressedSize += 1 << 32
-		}
+	// Read the gzip ISIZE field (uncompressed input size) which is stored as the
+	// last 4 bytes (possibly truncated) little-endian.
+	if fi.Size() < 4 {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("unexpected file size %v for %s", fi.Size(), importFilename)
+		log.Printf(req.FailureReason)
+		return
+	}
+	buf := make([]byte, 4)
+	if read, err := importFile.ReadAt(buf, fi.Size()-4); read != 4 || err != nil {
+		req.Status = pb.ContainerImportProgress_FAILED
+		req.FailureReason = fmt.Sprintf("failed to read isize from %s read %v bytes: %v", importFilename, read, err)
+		log.Printf(req.FailureReason)
+		return
+	}
+	compressedSize := uint64(fi.Size())
+	isize := uint64(binary.LittleEndian.Uint32(buf))
 
-		// Lxd copies the compressed file into its storage before uncompressing it.
-		minDiskUsage := minUncompressedSize + compressedSize
-		if minDiskUsage > availableDiskSpaceBytes {
-			req.Status = pb.ContainerImportProgress_FAILED_SPACE
-			req.DiskSpaceAvailableBytes = availableDiskSpaceBytes
-			req.DiskSpaceRequiredBytes = minDiskUsage
-			req.FailureReason = fmt.Sprintf("insufficient space for import, have %v bytes but needed at least %v bytes", availableDiskSpaceBytes, minDiskUsage)
-			log.Printf(req.FailureReason)
-			return
-		}
+	// ISIZE is only 32-bits and is not accurate if the uncompressed size
+	// is greater than ~4G. Assuming that the uncompressed file must be
+	// larger than compressed, we can estimate minUncompressedSize by
+	// repeatedly adding 4G to ISIZE until it is larger than compressed.
+	// The same outcome can be achieved without introducing loops by oring
+	// the top 32 bits of the compressed size with the isize, and rounding
+	// up by 1<<32 once if necessary.
+	minUncompressedSize := (compressedSize &^ 0xffffffff) | isize
+	if minUncompressedSize < compressedSize {
+		minUncompressedSize += 1 << 32
+	}
+
+	// Lxd copies the compressed file into its storage before uncompressing it.
+	minDiskUsage := minUncompressedSize + compressedSize
+	if minDiskUsage > availableDiskSpaceBytes {
+		req.Status = pb.ContainerImportProgress_FAILED_SPACE
+		req.DiskSpaceAvailableBytes = availableDiskSpaceBytes
+		req.DiskSpaceRequiredBytes = minDiskUsage
+		req.FailureReason = fmt.Sprintf("insufficient space for import, have %v bytes but needed at least %v bytes", availableDiskSpaceBytes, minDiskUsage)
+		log.Printf(req.FailureReason)
+		return
 	}
 
 	// Import image. Reset importFile to start.
@@ -2124,7 +2130,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string, avail
 
 // ImportContainer implements tremplin.ImportContainer.
 func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportContainerRequest) (*pb.ImportContainerResponse, error) {
-	log.Printf("Received ImportContainer RPC: %s %s %v", in.ContainerName, in.ImportPath, in.AvailableDiskSpace)
+	log.Printf("Received ImportContainer RPC: %s %s", in.ContainerName, in.ImportPath)
 
 	if !s.exportImportStatus.StartTransaction(in.ContainerName) {
 		// !started is true iff there is a collision on container names in the
@@ -2139,7 +2145,7 @@ func (s *tremplinServer) ImportContainer(ctx context.Context, in *pb.ImportConta
 	}
 
 	go func() {
-		s.importContainer(in.ContainerName, in.ImportPath, in.AvailableDiskSpace)
+		s.importContainer(in.ContainerName, in.ImportPath)
 		if !s.exportImportStatus.Remove(in.ContainerName) {
 			// !removed is true iff no transaction exists for the container name, this
 			// should never happen, and if it does no cleanup is required.
