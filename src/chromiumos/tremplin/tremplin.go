@@ -199,7 +199,7 @@ func (s *tremplinServer) subscribeToEvents() error {
 			unmarshaledLifecycle.Action, unmarshaledLifecycle.Source)
 
 		switch unmarshaledLifecycle.Action {
-		case "container-shutdown", "instance-shutdown":
+		case "instance-shutdown", "instance-stopped":
 			containerName, err := getContainerName(unmarshaledLifecycle.Source)
 			if err != nil {
 				log.Printf("Could not parse container name: %v", err)
@@ -211,7 +211,7 @@ func (s *tremplinServer) subscribeToEvents() error {
 			if err != nil {
 				log.Printf("Could not notify ContainerShutdown of %s on host: %v", containerName, err)
 			}
-		case "container-deleted", "instance-deleted":
+		case "instance-deleted":
 			containerName, err := getContainerName(unmarshaledLifecycle.Source)
 			if err != nil {
 				log.Printf("Could not parse container name: %v", err)
