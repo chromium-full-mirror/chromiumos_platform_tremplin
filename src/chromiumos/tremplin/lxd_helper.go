@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	pb "chromiumos/vm_tools/vm_crash"
+	pb "go.chromium.org/chromiumos/vm_tools/vm_crash"
 
 	lxd "github.com/lxc/lxd/client"
 	"google.golang.org/grpc"

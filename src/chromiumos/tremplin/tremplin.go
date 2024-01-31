@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	pb "chromiumos/vm_tools/tremplin_proto"
+	pb "go.chromium.org/chromiumos/vm_tools/tremplin_proto"
 
 	"github.com/elastic/go-libaudit"
 	lxd "github.com/lxc/lxd/client"

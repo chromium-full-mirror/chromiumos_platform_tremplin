@@ -5,7 +5,7 @@
 package main
 
 import (
-	pb "chromiumos/vm_tools/vm_rpc"
+	pb "go.chromium.org/chromiumos/vm_tools/vm_rpc"
 	"flag"
 	"testing"
 )

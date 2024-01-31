@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"chromiumos/tremplin/sock_diag"
-	pb "chromiumos/vm_tools/tremplin_proto"
+	pb "go.chromium.org/chromiumos/vm_tools/tremplin_proto"
 
 	"github.com/elastic/go-libaudit"
 	"github.com/elastic/go-libaudit/auparse"

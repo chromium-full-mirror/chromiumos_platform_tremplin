@@ -5,7 +5,7 @@
 package main
 
 import (
-	pb "chromiumos/vm_tools/tremplin_proto"
+	pb "go.chromium.org/chromiumos/vm_tools/tremplin_proto"
 	"context"
 	"errors"
 	"fmt"
