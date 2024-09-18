@@ -93,7 +93,7 @@ func NewPasswdDatabase(cfs InstanceFileServer) (*PasswdDatabase, error) {
 	}
 	if !found {
 		// We didn't find the entries we expected, assume something went wrong.
-		return nil, fmt.Errorf("Loaded /etc/passwd is missing expected entries. You might be hitting crbug/1216305")
+		return nil, fmt.Errorf("loaded /etc/passwd is missing expected entries. You might be hitting crbug/1216305")
 	}
 
 	return pd, nil

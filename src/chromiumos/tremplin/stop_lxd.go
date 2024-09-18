@@ -67,7 +67,6 @@ func findLxdProcesses() []int {
 // or a non-nil error if LXD is still running after the timeout or another error
 // occurred.
 func waitForLxdToExit(timeout time.Duration) error {
-	const interval = 500 * time.Millisecond
 	end := time.Now().Add(timeout)
 
 	for time.Now().Before(end) {
@@ -76,7 +75,7 @@ func waitForLxdToExit(timeout time.Duration) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("Timed out waiting for LXD to exit")
+	return fmt.Errorf("timed out waiting for LXD to exit")
 }
 
 // StopLxdIfRunning searches for any running LXD processes and

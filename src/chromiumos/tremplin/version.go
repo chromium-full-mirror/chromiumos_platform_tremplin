@@ -83,6 +83,9 @@ func getFileResolvingSymlinks(cfs InstanceFileServer, name, p string) (io.ReadCl
 		}
 
 		b, err := ioutil.ReadAll(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read symlink %q: %v", p, err)
+		}
 		symlink := strings.TrimSpace(string(b))
 		if path.IsAbs(symlink) {
 			p = symlink

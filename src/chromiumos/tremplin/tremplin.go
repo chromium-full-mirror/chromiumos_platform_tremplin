@@ -646,7 +646,7 @@ func (s *tremplinServer) startContainer(container *api.Instance, etag string, in
 	}
 
 	if remap {
-		container, etag, err = s.remapContainer(container)
+		container, _, err = s.remapContainer(container)
 		if err != nil {
 			log.Printf("Remap: error: %v", err)
 			req.Status = pb.ContainerStartProgress_FAILED
@@ -1344,8 +1344,8 @@ func (s *tremplinServer) SetUpUser(ctx context.Context, in *pb.SetUpUserRequest)
 	for _, user := range users {
 		if err := pd.EnsureUserExists(user.name, user.uid, user.loginEnabled); err != nil {
 			response.Status = pb.SetUpUserResponse_FAILED
-			response.FailureReason = fmt.Sprintf("failed to create user, uid=%v, loginEnabled=%v: %v", user.uid, user.loginEnabled, err)
-			strings.ReplaceAll(response.FailureReason, user.name, "$USERNAME")
+			failureReason := fmt.Sprintf("failed to create user, uid=%v, loginEnabled=%v: %v", user.uid, user.loginEnabled, err)
+			response.FailureReason = strings.ReplaceAll(failureReason, user.name, "$USERNAME")
 			return response, nil
 		}
 		pd.EnsureGroupExists(user.name, user.uid)
@@ -1492,7 +1492,7 @@ func (s *tremplinServer) SetTimezone(ctx context.Context, in *pb.SetTimezoneRequ
 
 		// Second option, set the TZ environment variable for this particular container.
 		if in.PosixTzString == "" {
-			errors = append(errors, fmt.Sprintf("setting timezone by TZ variable failed: no POSIX TZ string provided"))
+			errors = append(errors, "setting timezone by TZ variable failed: no POSIX TZ string provided")
 		} else {
 			container.Config["environment.TZ"] = in.PosixTzString
 			operation, err := s.lxd.UpdateInstance(container.Name, container.Writable(), "")

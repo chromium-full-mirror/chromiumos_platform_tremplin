@@ -139,7 +139,7 @@ func initServer(c lxd.InstanceServer) error {
 	serverPut.Config["core.shutdown_timeout"] = "0"
 
 	if err := c.UpdateServer(serverPut, etag); err != nil {
-		log.Print("Failed to update server: ", err)
+		log.Print("failed to update server: ", err)
 		return err
 	}
 	return nil
@@ -155,13 +155,13 @@ func defaultStoragePool() api.StoragePoolsPost {
 
 func initStoragePool(c lxd.InstanceServer) error {
 	if _, _, err := c.GetStoragePool(defaultStoragePoolName); err != nil {
-		log.Print("Failed to get storage pool: ", err)
+		log.Print("failed to get storage pool: ", err)
 		err = c.CreateStoragePool(defaultStoragePool())
 		if err != nil {
-			log.Print("Failed to create storage pool: ", err)
+			log.Print("failed to create storage pool: ", err)
 			newer, verr := lxdNewerThan(lxdVersionLastWithOldRecovery)
 			if verr != nil {
-				return fmt.Errorf("Unable to determine lxd version: %w", verr)
+				return fmt.Errorf("unable to determine lxd version: %w", verr)
 			}
 			if newer {
 				return recoverStoragePools(c)
@@ -202,7 +202,7 @@ func addDevice(devName string, devices map[string]map[string]string) error {
 	stat := syscall.Stat_t{}
 	err := syscall.Stat(path, &stat)
 	if err != nil {
-		log.Printf("Device %v stat failed: %v", path, err)
+		log.Printf("device %v stat failed: %v", path, err)
 		return err
 	}
 	major := unix.Major(stat.Rdev)
@@ -215,7 +215,7 @@ func addDevice(devName string, devices map[string]map[string]string) error {
 	} else if fileType == unix.S_IFBLK {
 		deviceType = "unix-block"
 	} else {
-		return fmt.Errorf("Invalid device type %q", fileType)
+		return fmt.Errorf("invalid device type %q", fileType)
 	}
 
 	devices[path] = map[string]string{
@@ -238,7 +238,7 @@ func removeDevice(devName string, devices map[string]map[string]string) error {
 
 func removeFilteredDevices(devices map[string]map[string]string, filter func(path string) bool) int {
 	var count int
-	for path, _ := range devices {
+	for path := range devices {
 		if filter(path) {
 			log.Print("Removing device: ", path)
 			delete(devices, path)
@@ -287,7 +287,7 @@ func initDevices(devices map[string]map[string]string) {
 func createUeventSocket() (int, error) {
 	sock, err := syscall.Socket(syscall.AF_NETLINK, syscall.SOCK_RAW, syscall.NETLINK_KOBJECT_UEVENT)
 	if err != nil {
-		log.Print("Could not create uevent netlink socket: ", err)
+		log.Print("could not create uevent netlink socket: ", err)
 		return -1, err
 	}
 
@@ -300,7 +300,7 @@ func createUeventSocket() (int, error) {
 	err = syscall.Bind(sock, &sockaddr)
 	if err != nil {
 		syscall.Close(sock)
-		log.Print("Could not bind uevent netlink socket: ", err)
+		log.Print("could not bind uevent netlink socket: ", err)
 		return -1, err
 	}
 
@@ -349,12 +349,12 @@ func (s *tremplinServer) ueventListen() error {
 		ueventBytes := make([]byte, ueventBufferSize)
 		recvLen, _, err := syscall.Recvfrom(s.ueventSocket, ueventBytes, 0)
 		if err != nil {
-			log.Fatal("Failed to read uevent: ", err)
+			log.Fatal("failed to read uevent: ", err)
 		}
 
 		uevent, err := readUevent(ueventBytes[:recvLen])
 		if err != nil {
-			log.Print("Parsing uevent failed: ", err)
+			log.Print("parsing uevent failed: ", err)
 			continue
 		}
 
@@ -367,7 +367,7 @@ func (s *tremplinServer) ueventListen() error {
 			err = s.handleUsbUevent(uevent)
 		}
 		if err != nil {
-			log.Print("Failed to handle uevent: ", err)
+			log.Print("failed to handle uevent: ", err)
 			continue
 		}
 	}
@@ -411,12 +411,12 @@ func updateRequiredDevices(c lxd.InstanceServer) error {
 	// have this update by then.
 	names, err := c.GetContainerNames()
 	if err != nil {
-		return fmt.Errorf("Couldn't get container names: %v", err)
+		return fmt.Errorf("couldn't get container names: %v", err)
 	}
 	for _, name := range names {
 		container, etag, err := c.GetContainer(name)
 		if err != nil {
-			return fmt.Errorf("Couldn't get container %s: %v", name, err)
+			return fmt.Errorf("couldn't get container %s: %v", name, err)
 		}
 
 		containerPut := container.Writable()
@@ -428,10 +428,10 @@ func updateRequiredDevices(c lxd.InstanceServer) error {
 
 		op, err := c.UpdateContainer(name, containerPut, etag)
 		if err != nil {
-			return fmt.Errorf("Couldn't update container %s: %v", name, err)
+			return fmt.Errorf("couldn't update container %s: %v", name, err)
 		}
 		if err := op.Wait(); err != nil {
-			return fmt.Errorf("Couldn't wait to update container %s: %v", name, err)
+			return fmt.Errorf("couldn't wait to update container %s: %v", name, err)
 		}
 	}
 
@@ -444,7 +444,7 @@ func (s *tremplinServer) initialSetup(c lxd.InstanceServer) error {
 		// It is fine to keep going in this case. Some configurations
 		// like manatee don't have USB working but the guest VM and
 		// container can boot fine without it.
-		log.Printf("Failed to init USB manager: %v", err)
+		log.Printf("failed to init USB manager: %v", err)
 	} else {
 		s.usbManager = usbManager
 	}
@@ -460,34 +460,34 @@ func (s *tremplinServer) initialSetup(c lxd.InstanceServer) error {
 	}
 
 	if err := initServer(c); err != nil {
-		return fmt.Errorf("Failed to init server: %w", err)
+		return fmt.Errorf("failed to init server: %w", err)
 	}
 
 	if err := updateRequiredDevices(c); err != nil {
-		return fmt.Errorf("Failed to change required devices for existing containers: %w", err)
+		return fmt.Errorf("failed to change required devices for existing containers: %w", err)
 	}
 
 	if err := initStoragePool(c); err != nil {
-		return fmt.Errorf("Failed to init storage pool: %w", err)
+		return fmt.Errorf("failed to init storage pool: %w", err)
 	}
 
 	if err := initNetwork(c, s.subnet); err != nil {
-		return fmt.Errorf("Failed to init network: %w", err)
+		return fmt.Errorf("failed to init network: %w", err)
 	}
 
 	if err := initProfile(c); err != nil {
-		return fmt.Errorf("Failed to init profile: %w", err)
+		return fmt.Errorf("failed to init profile: %w", err)
 	}
 
 	// Create the lxd_conf directory for manual LXD usage.
 	if err := os.MkdirAll(lxdConfPath, 0755); err != nil {
-		return fmt.Errorf("Failed to create lxd conf dir: %w", err)
+		return fmt.Errorf("failed to create lxd conf dir: %w", err)
 	}
 
 	// Set the conf dir to be owned by chronos.
 	u, err := user.Lookup("chronos")
 	if err != nil {
-		return fmt.Errorf("Failed to look up chronos: %w", err)
+		return fmt.Errorf("failed to look up chronos: %w", err)
 	}
 	uid, err := strconv.Atoi(u.Uid)
 	if err != nil {
@@ -495,14 +495,14 @@ func (s *tremplinServer) initialSetup(c lxd.InstanceServer) error {
 	}
 	g, err := user.LookupGroup("chronos")
 	if err != nil {
-		return fmt.Errorf("Failed to look up group: %w", err)
+		return fmt.Errorf("failed to look up group: %w", err)
 	}
 	gid, err := strconv.Atoi(g.Gid)
 	if err != nil {
 		return fmt.Errorf("%q is not a valid gid: %w", g.Gid, err)
 	}
 	if err := os.Chown(lxdConfPath, uid, gid); err != nil {
-		return fmt.Errorf("Failed to chown lxd conf: %w", err)
+		return fmt.Errorf("failed to chown lxd conf: %w", err)
 	}
 
 	return nil
@@ -515,12 +515,12 @@ func (s *tremplinServer) initialSetup(c lxd.InstanceServer) error {
 func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
 	f, err := os.Open("/mnt/stateful/lxd/containers")
 	if err != nil {
-		log.Print("Error opening container dir to list files: ", err)
+		log.Print("error opening container dir to list files: ", err)
 		return false
 	}
 	names, err := f.Readdirnames(0)
 	if err != nil {
-		log.Print("Error listing existing containers: ", err)
+		log.Print("error listing existing containers: ", err)
 		return false
 	}
 	if len(names) != 1 {
@@ -536,14 +536,14 @@ func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
 
 	data, err := ioutil.ReadFile(fmt.Sprintf("/mnt/stateful/lxd/containers/%s/backup.yaml", defaultContainerName))
 	if err != nil {
-		log.Print("Error reading backup.yaml, not resetting since can't import without backup.yaml: ", err)
+		log.Print("error reading backup.yaml, not resetting since can't import without backup.yaml: ", err)
 		return false
 	}
 
 	var y backupYaml
 	err = yaml.Unmarshal(data, &y)
 	if err != nil {
-		log.Print("Error unmarshalling backup.yaml, not resetting since can't perform all safety checks: ", err)
+		log.Print("error unmarshalling backup.yaml, not resetting since can't perform all safety checks: ", err)
 		return false
 	}
 
@@ -567,7 +567,7 @@ func clearLXDDirectory(path string) error {
 	} else if err != nil {
 		// Some other error happened, no idea if the folder
 		// exists or not so fail.
-		return fmt.Errorf("Unable to check if path %q exists: %w", path, err)
+		return fmt.Errorf("unable to check if path %q exists: %w", path, err)
 	} else {
 		// Move the folder
 		// Delete any old copies. We ignore errors since either it's fine
@@ -575,7 +575,7 @@ func clearLXDDirectory(path string) error {
 		os.RemoveAll(path + lxdBackupPath)
 		err = os.Rename(path, path+lxdBackupPath)
 		if err != nil {
-			return fmt.Errorf("Unable to clear path %q: %w", path, err)
+			return fmt.Errorf("unable to clear path %q: %w", path, err)
 		}
 	}
 	return nil
@@ -586,11 +586,11 @@ func restoreLXDDirectory(path string) error {
 	if os.IsNotExist(err) {
 		// Folder to replace doesn't exist, nothing to do.
 	} else if err != nil {
-		return fmt.Errorf("Unable to delete the empty directory %q: %w", path, err)
+		return fmt.Errorf("unable to delete the empty directory %q: %w", path, err)
 	}
 	err = os.Rename(path+lxdBackupPath, path)
 	if err != nil {
-		return fmt.Errorf("Unable to restore the old path %q: %w", path, err)
+		return fmt.Errorf("unable to restore the old path %q: %w", path, err)
 	}
 	return nil
 }
@@ -608,7 +608,7 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 		var err error
 		s.ueventSocket, err = createUeventSocket()
 		if err != nil {
-			return fmt.Errorf("Failed to open uevent netlink connection: %w", err)
+			return fmt.Errorf("failed to open uevent netlink connection: %w", err)
 		}
 	} else {
 		log.Print("Found an existing uevent socket so reusing. Did a previous launch fail?")
@@ -642,7 +642,7 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 				log.Print(err)
 			}
 		}
-		return fmt.Errorf("Failed to connect to LXD daemon: %w", err)
+		return fmt.Errorf("failed to connect to LXD daemon: %w", err)
 	}
 	if shouldReset {
 		// shouldResetLxdDbBeforeLaunch returns false if there's no penguin
@@ -656,9 +656,9 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 			// restart
 			log.Print("Unable to import container: ", err)
 			log.Print("Attempting fallback method of starting LXD")
-			importErr := fmt.Errorf("Failed to lxd import container: %w", err)
+			importErr := fmt.Errorf("failed to lxd import container: %w", err)
 			if err := s.StopLxdIfRunning(); err != nil {
-				log.Print("Failed to stop LXD: ", err)
+				log.Print("failed to stop LXD: ", err)
 				return importErr
 			}
 			if err := restoreLXDDirectory(lxdDatabasePath); err != nil {
@@ -671,7 +671,7 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 			}
 			c, err = s.lxdHelper.LaunchLxd()
 			if err != nil {
-				log.Print("Failed to connect to LXD daemon: ", err)
+				log.Print("failed to connect to LXD daemon: ", err)
 				return importErr
 			}
 			log.Print("LXD started via fallback method")
@@ -679,11 +679,11 @@ func (s *tremplinServer) InitLxd(resetDB bool) error {
 	}
 
 	if err := s.initialSetup(c); err != nil {
-		return fmt.Errorf("Failed initialSetup: %w", err)
+		return fmt.Errorf("failed initialSetup: %w", err)
 	}
 
 	if err := s.startAuditListener(); err != nil {
-		return fmt.Errorf("Failed to start audit listener: %w", err)
+		return fmt.Errorf("failed to start audit listener: %w", err)
 	}
 
 	// Listen for device updates.
@@ -702,18 +702,18 @@ func recoverContainer(c lxd.InstanceServer, name string) error {
 		dir := filepath.Dir(b.source)
 		err := os.MkdirAll(dir, 0644)
 		if err != nil {
-			return fmt.Errorf("Unable to create folder %s: %w", dir, err)
+			return fmt.Errorf("unable to create folder %s: %w", dir, err)
 		}
 		f, err := os.OpenFile(b.source, os.O_RDONLY|os.O_CREATE, 0644)
 		if err != nil {
-			return fmt.Errorf("Unable to create stub file %s: %w", b.source, err)
+			return fmt.Errorf("unable to create stub file %s: %w", b.source, err)
 		}
 		f.Close()
 	}
 
 	newer, err := lxdNewerThan(lxdVersionLastWithOldRecovery)
 	if err != nil {
-		return fmt.Errorf("Unable to determine lxd version: %w", err)
+		return fmt.Errorf("unable to determine lxd version: %w", err)
 	}
 	if newer {
 		return recoverStoragePools(c)
@@ -721,7 +721,7 @@ func recoverContainer(c lxd.InstanceServer, name string) error {
 	// Old version of lxd, exec  "lxd import --force".
 	out, err := execCommand("lxd", "import", "--force", name)
 	if err != nil {
-		return fmt.Errorf("Error importing container. Stdout/err: %s. Error: %w", out, err)
+		return fmt.Errorf("error importing container. Stdout/err: %s. Error: %w", out, err)
 	}
 	return nil
 }
@@ -731,18 +731,18 @@ func recoverContainer(c lxd.InstanceServer, name string) error {
 func lxdNewerThan(versionString string) (bool, error) {
 	minVersion, err := version.NewDottedVersion(versionString)
 	if err != nil {
-		log.Print("Error parsing input version string: ", err)
+		log.Print("error parsing input version string: ", err)
 		return false, err
 	}
 	out, err := execCommand("lxd", "version")
 	if err != nil {
-		log.Print("Error calling 'lxd version': ", err)
+		log.Print("error calling 'lxd version': ", err)
 		return false, err
 	}
 	log.Print("LXD reports version ", out)
 	lxdVersion, err := version.NewDottedVersion(strings.TrimSpace(out))
 	if err != nil {
-		log.Print("Error parsing lxd version: ", err)
+		log.Print("error parsing lxd version: ", err)
 		return false, err
 	}
 	return minVersion.Compare(lxdVersion) < 0, nil
@@ -761,7 +761,7 @@ func recoverStoragePools(c lxd.InstanceServer) error {
 		Pools: []api.StoragePoolsPost{defaultStoragePool()},
 	}
 	if _, _, err := c.RawQuery("POST", recoverEndpoint, reqRecover, ""); err != nil {
-		return fmt.Errorf("Error posting to %v: %w", recoverEndpoint, err)
+		return fmt.Errorf("error posting to %v: %w", recoverEndpoint, err)
 	}
 	return nil
 }

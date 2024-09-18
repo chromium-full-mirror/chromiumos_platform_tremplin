@@ -238,8 +238,8 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 		server.lxd.(*lxdStub).osRelease = makeOsRelease(table.codename)
 		status, err := server.startUpgradeContainer(fmt.Sprintf("%s -> %s", table.codename, table.to.String()), table.to)
 		if status != table.expected {
-			t.Errorf("Status of (%s -> %s) was incorrect, got: %v, want: %v.", table.codename, table.to.String(), status, table.expected)
-			t.Errorf("Response message: %q", err)
+			t.Errorf("status of (%s -> %s) was incorrect, got: %v, want: %v.", table.codename, table.to.String(), status, table.expected)
+			t.Errorf("response message: %q", err)
 		}
 
 		var actualArgs []string
@@ -256,7 +256,7 @@ func TestUpgradeContainerVersionValidation(t *testing.T) {
 			expectedArgs = table.expectedArgs
 		}
 
-		for i, _ := range expectedArgs {
+		for i := range expectedArgs {
 			if expectedArgs[i] != actualArgs[i] {
 				argsCorrect = false
 				break
@@ -282,14 +282,14 @@ func TestUpgradeContainerSendsInProgressMessages(t *testing.T) {
 	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %v and message %s", status, msg)
+		t.Fatalf("failed to start, got %v and message %s", status, msg)
 	}
 	s := <-statusChannel
 	if s.Status != pb.UpgradeContainerProgress_IN_PROGRESS {
-		t.Fatalf("Didn't get in-progress message, got %v", s)
+		t.Fatalf("didn't get in-progress message, got %v", s)
 	}
 	if len(s.ProgressMessages) == 0 {
-		t.Fatal("Didn't get any progress messages")
+		t.Fatal("didn't get any progress messages")
 	}
 }
 
@@ -306,14 +306,14 @@ func TestUpgradeContainerSendsSuccessOnSuccessfulEnd(t *testing.T) {
 	status, msg := server.startUpgradeContainer("test1", pb.UpgradeContainerRequest_DEBIAN_BUSTER)
 
 	if status != pb.UpgradeContainerResponse_STARTED {
-		t.Fatalf("Failed to start, got %v and message %s", status, msg)
+		t.Fatalf("failed to start, got %v and message %s", status, msg)
 	}
 	s := <-ch
 	if s.Status != pb.UpgradeContainerProgress_SUCCEEDED {
-		t.Fatalf("Didn't get success message, got %v", s)
+		t.Fatalf("didn't get success message, got %v", s)
 	}
 	if !contains(s.ProgressMessages, "Done message") {
-		t.Fatalf("Didn't see expected end message, only saw: %v", s.ProgressMessages)
+		t.Fatalf("didn't see expected end message, only saw: %v", s.ProgressMessages)
 	}
 }
 

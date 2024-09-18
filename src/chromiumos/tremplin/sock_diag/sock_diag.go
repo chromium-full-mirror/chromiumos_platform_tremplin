@@ -216,7 +216,7 @@ func GetListeningLocalhostPorts(nsid uintptr) ([]uint16, error) {
 
 	// Collapse set of ports into a slice.
 	p := []uint16{}
-	for port, _ := range ports {
+	for port := range ports {
 		p = append(p, port)
 	}
 

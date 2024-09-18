@@ -509,7 +509,7 @@ func (s *fakeInstanceFileServer) assertContainerPath(filePath string, expect lxd
 	respEntries := append([]string{}, resp.Entries...)
 	sort.Strings(respEntries)
 
-	for i, _ := range expect.Entries {
+	for i := range expect.Entries {
 		if expectEntries[i] != respEntries[i] {
 			s.t.Fatalf("Found unexpected directory entry: %s", respEntries[i])
 		}

@@ -21,12 +21,12 @@ func (s *tremplinServer) shutDownContainer(containerName string) error {
 	log.Printf("shutdown")
 	_, err := s.stopContainer(containerName, true)
 	if err != nil {
-		return fmt.Errorf("Failed to stop container %v with error %v", containerName, err)
+		return fmt.Errorf("failed to stop container %v with error %v", containerName, err)
 	}
 	// Notify cicerone that container has been shutdown.
 	_, err = s.listenerClient.ContainerShutdown(context.Background(), &pb.ContainerShutdownInfo{ContainerName: containerName})
 	if err != nil {
-		return fmt.Errorf("Could not notify ContainerShutdown of %s on host: %v", containerName, err)
+		return fmt.Errorf("could not notify ContainerShutdown of %s on host: %v", containerName, err)
 	}
 	return nil
 }

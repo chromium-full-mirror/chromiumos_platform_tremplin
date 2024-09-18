@@ -229,7 +229,7 @@ func (l *lxdHelper) LaunchLxd() (lxd.InstanceServer, error) {
 	c, err := lxdWaitready(context.TODO())
 	if err != nil {
 		// Timed out
-		return nil, fmt.Errorf("Timed out waiting for LXD to start. Last error was: %w", err)
+		return nil, fmt.Errorf("timed out waiting for LXD to start. Last error was: %w", err)
 	}
 	log.Print("LXD running and ready")
 	return c, nil

@@ -42,14 +42,14 @@ type containerUsbPort struct {
 func (u *containerUsbPort) attachAllDevices(lxd lxd.InstanceServer) error {
 	container, etag, err := lxd.GetInstance(u.containerName)
 	if err != nil {
-		return fmt.Errorf("Failed to get container %q: %w", u.containerName, err)
+		return fmt.Errorf("failed to get container %q: %w", u.containerName, err)
 	}
 
 	instancePut := container.Writable()
 	for devName := range u.knownDevices {
 		err = addDevice(devName, instancePut.Devices)
 		if err != nil {
-			return fmt.Errorf("Failed to add device: %w", err)
+			return fmt.Errorf("failed to add device: %w", err)
 		}
 	}
 
@@ -58,7 +58,7 @@ func (u *containerUsbPort) attachAllDevices(lxd lxd.InstanceServer) error {
 		return fmt.Errorf("UpdateInstance failed %q: %w", u.containerName, err)
 	}
 	if err := op.Wait(); err != nil {
-		return fmt.Errorf("Wait for UpdateInstance failed %q: %w", u.containerName, err)
+		return fmt.Errorf("wait for UpdateInstance failed %q: %w", u.containerName, err)
 	}
 
 	return nil
@@ -67,14 +67,14 @@ func (u *containerUsbPort) attachAllDevices(lxd lxd.InstanceServer) error {
 func (u *containerUsbPort) detachAllDevices(lxd lxd.InstanceServer) error {
 	container, etag, err := lxd.GetInstance(u.containerName)
 	if err != nil {
-		return fmt.Errorf("Failed to get container %q: %w", u.containerName, err)
+		return fmt.Errorf("failed to get container %q: %w", u.containerName, err)
 	}
 
 	instancePut := container.Writable()
 	for devName := range u.knownDevices {
 		err = removeDevice(devName, instancePut.Devices)
 		if err != nil {
-			return fmt.Errorf("Failed to remove device: %w", err)
+			return fmt.Errorf("failed to remove device: %w", err)
 		}
 	}
 
@@ -83,7 +83,7 @@ func (u *containerUsbPort) detachAllDevices(lxd lxd.InstanceServer) error {
 		return fmt.Errorf("UpdateInstance failed %q: %w", u.containerName, err)
 	}
 	if err := op.Wait(); err != nil {
-		return fmt.Errorf("Wait for UpdateInstance failed %q: %w", u.containerName, err)
+		return fmt.Errorf("wait for UpdateInstance failed %q: %w", u.containerName, err)
 	}
 
 	return nil
@@ -92,13 +92,13 @@ func (u *containerUsbPort) detachAllDevices(lxd lxd.InstanceServer) error {
 func initUsb(m *containerUsbManager, sysfsDir string) error {
 	devs, err := filepath.Glob(sysfsDir + "/bus/pci/devices/*")
 	if err != nil {
-		return fmt.Errorf("Failed to find PCI devices")
+		return fmt.Errorf("failed to find PCI devices")
 	}
 
 	for _, dev := range devs {
 		class, err := os.ReadFile(dev + "/class")
 		if err != nil {
-			return fmt.Errorf("Failed to read class code of %q: %w", dev, err)
+			return fmt.Errorf("failed to read class code of %q: %w", dev, err)
 		}
 		if string(class) != pciClassXhci {
 			continue
@@ -106,39 +106,39 @@ func initUsb(m *containerUsbManager, sysfsDir string) error {
 
 		target, err := os.Readlink(dev)
 		if err != nil {
-			return fmt.Errorf("Failed to read controller path: %w", err)
+			return fmt.Errorf("failed to read controller path: %w", err)
 		}
 
 		// Trim leading components of link target so it is relative to sysfsDir.
 		m.controllerPath, err = filepath.Rel("../../../", target)
 		if err != nil {
-			return fmt.Errorf("Failed to read controller path: %w", err)
+			return fmt.Errorf("failed to read controller path: %w", err)
 		}
 
 		buses, err := filepath.Glob(dev + "/usb*")
 		if err != nil {
-			return fmt.Errorf("Failed to find USB buses")
+			return fmt.Errorf("failed to find USB buses")
 		}
 
 		for _, bus := range buses {
 			productId, err := os.ReadFile(bus + "/idProduct")
 			if err != nil {
-				return fmt.Errorf("Failed to read product ID: %w", err)
+				return fmt.Errorf("failed to read product ID: %w", err)
 			}
 
 			numPortsRaw, err := os.ReadFile(bus + "/maxchild")
 			if err != nil {
-				return fmt.Errorf("Failed to read maxchild: %w", err)
+				return fmt.Errorf("failed to read maxchild: %w", err)
 			}
 			numPorts, err := strconv.ParseInt(strings.TrimSpace(string(numPortsRaw)), 10, 0)
 			if err != nil {
-				return fmt.Errorf("Failed to parse maxchild: %w", err)
+				return fmt.Errorf("failed to parse maxchild: %w", err)
 			}
 
 			busString := strings.TrimPrefix(bus, dev+"/usb")
 			busNumber, err := strconv.ParseInt(busString, 10, 0)
 			if err != nil {
-				return fmt.Errorf("Failed to get USB bus number")
+				return fmt.Errorf("failed to get USB bus number")
 			}
 
 			if string(productId) == usb2RootHubPid {
@@ -155,11 +155,11 @@ func initUsb(m *containerUsbManager, sysfsDir string) error {
 	}
 
 	if m.controllerPath == "" {
-		return fmt.Errorf("Failed to find the USB controller")
+		return fmt.Errorf("failed to find the USB controller")
 	}
 
 	if m.usb2BusNumber == 0 || m.usb3BusNumber == 0 {
-		return fmt.Errorf("Failed to determine USB bus numbers")
+		return fmt.Errorf("failed to determine USB bus numbers")
 	}
 
 	m.portInfo = make([]containerUsbPort, m.usb2NumPorts+m.usb3NumPorts)
@@ -196,35 +196,35 @@ func (m *containerUsbManager) getPortNumberFromDevPath(devPath string) (int, err
 
 	busPort := m.busPortRegexp.FindStringSubmatch(devPath)
 	if busPort == nil {
-		return 0, fmt.Errorf("Invalid bus/port")
+		return 0, fmt.Errorf("invalid bus/port")
 	}
 
 	b, err := strconv.ParseInt(busPort[1], 10, 0)
 	if err != nil {
-		return 0, fmt.Errorf("Could not parse bus number %q: %w", busPort[1], err)
+		return 0, fmt.Errorf("could not parse bus number %q: %w", busPort[1], err)
 	}
 	bus := int(b)
 
 	p, err := strconv.ParseInt(busPort[2], 10, 0)
 	if err != nil {
-		return 0, fmt.Errorf("Could not parse port number %q: %w", busPort[2], err)
+		return 0, fmt.Errorf("could not parse port number %q: %w", busPort[2], err)
 	}
 	port := int(p)
 
 	if bus == m.usb2BusNumber {
 		if port < 1 || port > m.usb2NumPorts {
-			return 0, fmt.Errorf("Invalid port number: %q", port)
+			return 0, fmt.Errorf("invalid port number: %q", port)
 		}
 		return port, nil
 	} else if bus == m.usb3BusNumber {
 		if port < 1 || port > m.usb3NumPorts {
-			return 0, fmt.Errorf("Invalid port number: %q", port)
+			return 0, fmt.Errorf("invalid port number: %q", port)
 		}
 		// USB 3.0 ports follow USB 2.0 ports.
 		return port + m.usb2NumPorts, nil
 	}
 
-	return 0, fmt.Errorf("Invalid bus number %q", bus)
+	return 0, fmt.Errorf("invalid bus number %q", bus)
 }
 
 func (s *tremplinServer) handleUsbUevent(uevent map[string]string) error {
@@ -252,7 +252,7 @@ func (s *tremplinServer) handleUsbUevent(uevent map[string]string) error {
 
 	port, err := m.getPortNumberFromDevPath(devPath)
 	if err != nil {
-		return fmt.Errorf("Failed to get port number: %w", err)
+		return fmt.Errorf("failed to get port number: %w", err)
 	}
 
 	m.Lock()
@@ -262,7 +262,7 @@ func (s *tremplinServer) handleUsbUevent(uevent map[string]string) error {
 	if portInfo.attached {
 		container, etag, err := s.lxd.GetInstance(portInfo.containerName)
 		if err != nil {
-			return fmt.Errorf("Failed to get container %q: %w", portInfo.containerName, err)
+			return fmt.Errorf("failed to get container %q: %w", portInfo.containerName, err)
 		}
 
 		instancePut := container.Writable()
@@ -270,12 +270,12 @@ func (s *tremplinServer) handleUsbUevent(uevent map[string]string) error {
 		if action == "add" {
 			err = addDevice(devName, instancePut.Devices)
 			if err != nil {
-				return fmt.Errorf("Failed to add device: %w", err)
+				return fmt.Errorf("failed to add device: %w", err)
 			}
 		} else if action == "remove" {
 			err = removeDevice(devName, instancePut.Devices)
 			if err != nil {
-				return fmt.Errorf("Failed to remove device: %w", err)
+				return fmt.Errorf("failed to remove device: %w", err)
 			}
 		}
 
@@ -284,7 +284,7 @@ func (s *tremplinServer) handleUsbUevent(uevent map[string]string) error {
 			return fmt.Errorf("UpdateInstance failed %q: %w", portInfo.containerName, err)
 		}
 		if err := op.Wait(); err != nil {
-			return fmt.Errorf("Wait for UpdateInstance failed %q: %w", portInfo.containerName, err)
+			return fmt.Errorf("wait for UpdateInstance failed %q: %w", portInfo.containerName, err)
 		}
 	}
 

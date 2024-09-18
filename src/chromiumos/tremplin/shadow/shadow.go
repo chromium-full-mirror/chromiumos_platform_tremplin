@@ -228,6 +228,7 @@ func unmarshal(reader io.Reader, v interface{}) error {
 			structField := structType.Field(i)
 
 			if structField.Name == "Name" && len(fields[i]) == 0 {
+				//lint:ignore ST1005 "Name" is a field name, keep it capitalized as it appears in the code
 				return errors.New("Name field must be nonempty")
 			}
 
