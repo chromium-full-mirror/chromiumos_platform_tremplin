@@ -114,6 +114,7 @@ var (
 		regexp.MustCompile("^dri/.*$"),
 		regexp.MustCompile("^snd/[stc].*$"), // control, seq, timer
 		regexp.MustCompile("^snd/pcm.*p$"),  // playback only
+		regexp.MustCompile("^kmsg$"),        // dmesg -w
 		regexp.MustCompile("^kvm$"),
 		regexp.MustCompile("^wl0$"),
 	}
