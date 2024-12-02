@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path"
 	"strconv"
@@ -82,7 +81,7 @@ func getFileResolvingSymlinks(cfs InstanceFileServer, name, p string) (io.ReadCl
 			return r, resp, nil
 		}
 
-		b, err := ioutil.ReadAll(r)
+		b, err := io.ReadAll(r)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to read symlink %q: %v", p, err)
 		}

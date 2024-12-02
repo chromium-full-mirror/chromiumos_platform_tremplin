@@ -6,7 +6,6 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
@@ -20,7 +19,7 @@ import (
 // /usr/sbin/lxd or /opt/google/lxd-next/usr/bin/lxd and
 // {"lxd", "--group", "lxd", "--syslog"}.
 func findLxdProcesses() []int {
-	fileinfos, _ := ioutil.ReadDir("/proc")
+	fileinfos, _ := os.ReadDir("/proc")
 
 	// /proc/pid/cmdline contains the command line as a list of null-terminated strings.
 	cmdline := strings.Join(lxdCmd, "\x00") + "\x00"
@@ -49,7 +48,7 @@ func findLxdProcesses() []int {
 		if dest != "/usr/sbin/lxd" && dest != "/opt/google/lxd-next/usr/bin/lxd" {
 			continue
 		}
-		procCmdline, err := ioutil.ReadFile("/proc/" + file.Name() + "/cmdline")
+		procCmdline, err := os.ReadFile("/proc/" + file.Name() + "/cmdline")
 		if err != nil {
 			// As above, we just skip over this path if there's an error
 			continue

@@ -6,7 +6,6 @@ package main
 
 import (
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"syscall"
@@ -110,7 +109,7 @@ func (cfs *FsInstanceFileServer) GetInstanceFile(path string) (content io.ReadCl
 	// instead of using FileMode.IsDir().
 	if (s.Mode & syscall.S_IFDIR) != 0 {
 		t = "directory"
-		list, err := ioutil.ReadDir(p)
+		list, err := os.ReadDir(p)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -166,11 +165,11 @@ func (cfs *FsInstanceFileServer) CreateInstanceFile(path string, args lxd.Instan
 				log.Panic("Only overwrite supported by CreateInstanceFile")
 			}
 			var b []byte
-			b, err = ioutil.ReadAll(args.Content)
+			b, err = io.ReadAll(args.Content)
 			if err != nil {
 				return err
 			}
-			if err := ioutil.WriteFile(p, b, mode); err != nil {
+			if err := os.WriteFile(p, b, mode); err != nil {
 				return err
 			}
 		} else {

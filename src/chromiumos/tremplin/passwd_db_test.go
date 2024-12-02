@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"io/ioutil"
 	"path"
 	"sort"
 	"strings"
@@ -305,7 +304,7 @@ func (s *fakeInstanceFileServer) GetInstanceFile(filePath string) (io.ReadCloser
 	switch e := entry.(type) {
 	case *fakeFile:
 		resp.Type = "file"
-		content = ioutil.NopCloser(bytes.NewReader(e.content))
+		content = io.NopCloser(bytes.NewReader(e.content))
 	case *fakeDirectory:
 		resp.Type = "directory"
 		for _, dirEnt := range e.entries {
@@ -313,7 +312,7 @@ func (s *fakeInstanceFileServer) GetInstanceFile(filePath string) (io.ReadCloser
 		}
 	case *fakeSymlink:
 		resp.Type = "symlink"
-		content = ioutil.NopCloser(strings.NewReader(e.path))
+		content = io.NopCloser(strings.NewReader(e.path))
 	}
 
 	return content, resp, nil
@@ -354,7 +353,7 @@ func (s *fakeInstanceFileServer) CreateInstanceFile(filePath string, args lxd.In
 			entries:  []fsEntry{},
 		}
 	case "file":
-		b, err := ioutil.ReadAll(args.Content)
+		b, err := io.ReadAll(args.Content)
 		if err != nil {
 			return err
 		}
@@ -363,7 +362,7 @@ func (s *fakeInstanceFileServer) CreateInstanceFile(filePath string, args lxd.In
 			content:  b,
 		}
 	case "symlink":
-		b, err := ioutil.ReadAll(args.Content)
+		b, err := io.ReadAll(args.Content)
 		if err != nil {
 			return err
 		}

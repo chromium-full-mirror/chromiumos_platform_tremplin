@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"encoding"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"path"
 	"time"
@@ -52,7 +52,7 @@ func NewPasswdDatabase(cfs InstanceFileServer) (*PasswdDatabase, error) {
 		}
 		defer r.Close()
 
-		b, err := ioutil.ReadAll(r)
+		b, err := io.ReadAll(r)
 		if err != nil {
 			return fmt.Errorf("failed to read %q: %v", path, err)
 		}
@@ -223,7 +223,7 @@ func (pd *PasswdDatabase) recursiveCopy(src, dst string, uid uint32) error {
 
 	switch s.Type {
 	case "file", "symlink":
-		b, err := ioutil.ReadAll(r)
+		b, err := io.ReadAll(r)
 		if err != nil {
 			return fmt.Errorf("failed to read in file %q: %v", src, err)
 		}

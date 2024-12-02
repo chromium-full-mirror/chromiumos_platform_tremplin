@@ -27,7 +27,7 @@ import (
 
 // vsockHostDialer dials the vsock host. The addr is in this case is just the
 // port, as the vsock cid is implied to be the host.
-func vsockHostDialer(addr string, timeout time.Duration) (net.Conn, error) {
+func vsockHostDialer(_ context.Context, addr string) (net.Conn, error) {
 	port, err := strconv.ParseInt(addr, 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert addr to int: %q", addr)
@@ -50,7 +50,7 @@ func main() {
 	}
 
 	conn, err := grpc.Dial(defaultHostPort,
-		grpc.WithDialer(vsockHostDialer),
+		grpc.WithContextDialer(vsockHostDialer),
 		grpc.WithInsecure())
 	if err != nil {
 		log.Print("Could not connect to tremplin listener: ", err)

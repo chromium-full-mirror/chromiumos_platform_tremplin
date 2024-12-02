@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"strings"
 	"testing"
@@ -58,7 +57,7 @@ func (s *lxdStub) UpdateInstanceState(containerName string, statePut api.Instanc
 }
 
 func (s *lxdStub) GetInstanceFile(containerName, path string) (io.ReadCloser, *lxd.InstanceFileResponse, error) {
-	reader := ioutil.NopCloser(strings.NewReader(s.osRelease))
+	reader := io.NopCloser(strings.NewReader(s.osRelease))
 	resp := lxd.InstanceFileResponse{}
 	return reader, &resp, nil
 }

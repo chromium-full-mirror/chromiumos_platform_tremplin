@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"golang.org/x/sys/unix"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -594,7 +593,7 @@ func (s *tremplinServer) startContainer(container *api.Instance, etag string, in
 			continue
 		}
 
-		err := ioutil.WriteFile(b.source, []byte(b.content), 0644)
+		err := os.WriteFile(b.source, []byte(b.content), 0644)
 		if err != nil {
 			req.Status = pb.ContainerStartProgress_FAILED
 			req.FailureReason = fmt.Sprintf("failed to write %q: %v", b.source, err)
@@ -1897,7 +1896,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		h, err := tarr.Next()
 		metadataReadOK := false
 		if err == nil && h.Name == "metadata.yaml" {
-			buf, _ := ioutil.ReadAll(tarr)
+			buf, _ := io.ReadAll(tarr)
 			metadata := api.ImageMetadata{}
 			err = yaml.Unmarshal(buf, &metadata)
 			if err == nil {
@@ -2314,7 +2313,7 @@ func (s *tremplinServer) GetDebugInfo(ctx context.Context, in *pb.GetDebugInfoRe
 	}
 	defer reader.Close()
 
-	bytes, err := ioutil.ReadAll(reader)
+	bytes, err := io.ReadAll(reader)
 	str := string(bytes)
 	if err != nil {
 		str = fmt.Sprintf("Error reading log: %v. Got:\n%s", err, str)

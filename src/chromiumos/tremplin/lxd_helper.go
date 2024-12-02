@@ -100,7 +100,7 @@ func runWithRetry(cmd func() error, shutdownSignal chan os.Signal, failureWindow
 // LXD.
 func signalLxdFailure() {
 	conn, err := grpc.Dial(crashHostPort,
-		grpc.WithDialer(vsockHostDialer),
+		grpc.WithContextDialer(vsockHostDialer),
 		grpc.WithInsecure())
 	if err != nil {
 		log.Print("Could not connect to crash listener: ", err)

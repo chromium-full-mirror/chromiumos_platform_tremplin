@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/user"
@@ -456,7 +455,7 @@ func (s *tremplinServer) initialSetup(c lxd.InstanceServer) error {
 	// then when the container is started.
 	milestone := s.milestone
 
-	if err := ioutil.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
+	if err := os.WriteFile(milestonePath, []byte(strconv.Itoa(milestone)), 0644); err != nil {
 		return fmt.Errorf("could not write milestone file: %v", err)
 	}
 
@@ -535,7 +534,7 @@ func (s *tremplinServer) shouldResetLxdDbBeforeLaunch() bool {
 		return false
 	}
 
-	data, err := ioutil.ReadFile(fmt.Sprintf("/mnt/stateful/lxd/containers/%s/backup.yaml", defaultContainerName))
+	data, err := os.ReadFile(fmt.Sprintf("/mnt/stateful/lxd/containers/%s/backup.yaml", defaultContainerName))
 	if err != nil {
 		log.Print("error reading backup.yaml, not resetting since can't import without backup.yaml: ", err)
 		return false
