@@ -1914,7 +1914,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 					req.FailureReason = fmt.Sprintf("Invalid image architecture %s must match local %s", metadata.Architecture, localArchName)
 					req.ArchitectureDevice = localArchName
 					req.ArchitectureContainer = metadata.Architecture
-					log.Printf(req.FailureReason)
+					log.Print(req.FailureReason)
 					return
 				} else {
 					log.Printf("Image architecture %s matches local %s", metadata.Architecture, localArchName)
@@ -1930,7 +1930,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to stat import file %s: %v", importFilename, err)
-		log.Printf(req.FailureReason)
+		log.Print(req.FailureReason)
 		return
 	}
 
@@ -1938,7 +1938,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 	if err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to get stateful partition space: %v", err)
-		log.Printf(req.FailureReason)
+		log.Print(req.FailureReason)
 		return
 	}
 
@@ -1947,14 +1947,14 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 	if fi.Size() < 4 {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("unexpected file size %v for %s", fi.Size(), importFilename)
-		log.Printf(req.FailureReason)
+		log.Print(req.FailureReason)
 		return
 	}
 	buf := make([]byte, 4)
 	if read, err := importFile.ReadAt(buf, fi.Size()-4); read != 4 || err != nil {
 		req.Status = pb.ContainerImportProgress_FAILED
 		req.FailureReason = fmt.Sprintf("failed to read isize from %s read %v bytes: %v", importFilename, read, err)
-		log.Printf(req.FailureReason)
+		log.Print(req.FailureReason)
 		return
 	}
 	compressedSize := uint64(fi.Size())
@@ -1979,7 +1979,7 @@ func (s *tremplinServer) importContainer(containerName, importPath string) {
 		req.DiskSpaceAvailableBytes = availableDiskSpaceBytes
 		req.DiskSpaceRequiredBytes = minDiskUsage
 		req.FailureReason = fmt.Sprintf("insufficient space for import, have %v bytes but needed at least %v bytes", availableDiskSpaceBytes, minDiskUsage)
-		log.Printf(req.FailureReason)
+		log.Print(req.FailureReason)
 		return
 	}
 
