@@ -215,7 +215,7 @@ func addDevice(devName string, devices map[string]map[string]string) error {
 	} else if fileType == unix.S_IFBLK {
 		deviceType = "unix-block"
 	} else {
-		return fmt.Errorf("invalid device type %q", fileType)
+		return fmt.Errorf("invalid device type %v", fileType)
 	}
 
 	devices[path] = map[string]string{

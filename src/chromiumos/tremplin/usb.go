@@ -213,18 +213,18 @@ func (m *containerUsbManager) getPortNumberFromDevPath(devPath string) (int, err
 
 	if bus == m.usb2BusNumber {
 		if port < 1 || port > m.usb2NumPorts {
-			return 0, fmt.Errorf("invalid port number: %q", port)
+			return 0, fmt.Errorf("invalid port number: %v", port)
 		}
 		return port, nil
 	} else if bus == m.usb3BusNumber {
 		if port < 1 || port > m.usb3NumPorts {
-			return 0, fmt.Errorf("invalid port number: %q", port)
+			return 0, fmt.Errorf("invalid port number: %v", port)
 		}
 		// USB 3.0 ports follow USB 2.0 ports.
 		return port + m.usb2NumPorts, nil
 	}
 
-	return 0, fmt.Errorf("invalid bus number %q", bus)
+	return 0, fmt.Errorf("invalid bus number %v", bus)
 }
 
 func (s *tremplinServer) handleUsbUevent(uevent map[string]string) error {
