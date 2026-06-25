@@ -172,8 +172,6 @@ type tremplinServer struct {
 	milestone                   int
 	timezoneName                string
 	exportImportStatus          TransactionMap
-	upgradeStatus               TransactionMap
-	upgradeClientUpdateInterval time.Duration
 	lxdHelper                   lxdHelper
 	features                    Features
 	ueventSocket                int
@@ -2168,25 +2166,6 @@ func (s *tremplinServer) CancelImportContainer(ctx context.Context, in *pb.Cance
 	}
 }
 
-// UpgradeContainer implements tremplin.UpgradeContainer.
-func (s *tremplinServer) UpgradeContainer(ctx context.Context, in *pb.UpgradeContainerRequest) (*pb.UpgradeContainerResponse, error) {
-	log.Printf("Received UpgradeContainer RPC: %s", in.ContainerName)
-	status, msg := s.startUpgradeContainer(in.ContainerName, in.TargetVersion)
-	return &pb.UpgradeContainerResponse{
-		Status:        status,
-		FailureReason: msg,
-	}, nil
-}
-
-// CancelUpgradeContainer implements (or will) tremplin.CancelUpgradeContainer.
-func (s *tremplinServer) CancelUpgradeContainer(ctx context.Context, in *pb.CancelUpgradeContainerRequest) (*pb.CancelUpgradeContainerResponse, error) {
-	log.Printf("Received CancelUpgradeContainer RPC: %s", in.ContainerName)
-	status, msg := s.cancelUpgradeContainer(in.ContainerName)
-	return &pb.CancelUpgradeContainerResponse{
-		Status:        status,
-		FailureReason: msg,
-	}, nil
-}
 
 // HostNetworkChanged implements tremplin.HostNetworkChanged.
 func (s *tremplinServer) HostNetworkChanged(ctx context.Context, in *pb.HostNetworkChangedRequest) (*pb.HostNetworkChangedResponse, error) {

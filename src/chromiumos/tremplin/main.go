@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	pb "go.chromium.org/chromiumos/vm_tools/tremplin_proto"
 
@@ -67,8 +66,6 @@ func main() {
 		listenerClient:              pb.NewTremplinListenerClient(conn),
 		milestone:                   milestone,
 		exportImportStatus:          *NewTransactionMap(),
-		upgradeStatus:               *NewTransactionMap(),
-		upgradeClientUpdateInterval: 5 * time.Second,
 		features:                    features,
 		ueventSocket:                -1,
 		auditClient:                 nil,
